@@ -10,6 +10,92 @@ DB_NAME = "papers.db"
 def get_connection():
     return sqlite3.connect(DB_NAME)
 
+
+# ここに追加
+def init_db():
+    conn = get_connection()
+    c = conn.cursor()
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE,
+        password TEXT
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS papers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT,
+        authors TEXT,
+        journal TEXT,
+        year INTEGER,
+        pdf_path TEXT,
+        user_id INTEGER
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS paper_tags (
+        paper_id INTEGER,
+        tag_id INTEGER
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# 起動時に実行
+init_db()
+
+if "user_id" not in st.session_state:
+    st.title("ログイン")
+
+    menu = st.radio("選択", ["ログイン", "新規登録"])
+
+    username = st.text_input("ユーザー名")
+    password = st.text_input("パスワード", type="password")
+
+    conn = get_connection()
+    c = conn.cursor()
+
+    if menu == "新規登録":
+        if st.button("登録"):
+            try:
+                c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+                conn.commit()
+                st.success("登録完了")
+            except:
+                st.error("ユーザー名が既に存在")
+
+    else:
+        if st.button("ログイン"):
+            c.execute("SELECT id FROM users WHERE username=? AND password=?", (username, password))
+            user = c.fetchone()
+
+            if user:
+                st.session_state["user_id"] = user[0]
+                st.success("ログイン成功")
+                st.rerun()
+            else:
+                st.error("失敗")
+
+    conn.close()
+    st.stop()
+
+# ログアウトボタン
+if st.sidebar.button("ログアウト"):
+    st.session_state.clear()
+    st.rerun()
+
 # 👇ここに追加（重要）
 def fetch_doi(doi):
     url = f"https://api.crossref.org/works/{doi}"
@@ -58,6 +144,7 @@ if menu == "追加":
        else:
           st.error("取得失敗")
 
+    tags = st.text_input("タグ（カンマ区切り）")
     if st.button("追加"):
         if pdf_file is not None:
             os.makedirs("pdfs", exist_ok=True)
@@ -73,13 +160,19 @@ if menu == "追加":
             conn = get_connection()
             c = conn.cursor()
 
-            c.execute("INSERT INTO papers (title, authors, journal, year, pdf_path) VALUES (?, ?, ?, ?, ?)",
-                      (title, authors, journal, int(year), new_path))
+            user_id = st.session_state["user_id"]
+
+            c.execute("""
+            INSERT INTO papers (title, authors, journal, year, pdf_path, user_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (title, authors, journal, int(year), new_path, user_id))
             paper_id = c.lastrowid
 
-            tags = st.text_input("タグ（カンマ区切り）")
+            
             for tag in tags.split(","):
                 tag = tag.strip()
+                if tag == "":
+                    continue
                 c.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
                 c.execute("SELECT id FROM tags WHERE name=?", (tag,))
                 tag_id = c.fetchone()[0]
@@ -102,9 +195,9 @@ elif menu == "検索":
 
         c.execute("""
         SELECT id, title, authors, year FROM papers
-        WHERE title LIKE ? OR authors LIKE ?
-        """, (f"%{keyword}%", f"%{keyword}%"))
-
+        WHERE (title LIKE ? OR authors LIKE ?)
+        AND user_id=?
+        """, (f"%{keyword}%", f"%{keyword}%", st.session_state["user_id"]))
         results = c.fetchall()
         conn.close()
 
@@ -118,7 +211,13 @@ elif menu == "一覧":
     import pandas as pd
 
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM papers", conn)
+    user_id = st.session_state["user_id"]
+
+    df = pd.read_sql_query(
+       "SELECT * FROM papers WHERE user_id=?",
+       conn,
+       params=(user_id,)
+    )
     conn.close()
 
     st.header("📚 論文一覧")
@@ -204,7 +303,8 @@ elif menu == "タグ検索":
         JOIN paper_tags ON papers.id = paper_tags.paper_id
         JOIN tags ON tags.id = paper_tags.tag_id
         WHERE tags.name = ?
-        """, (tag,))
+        AND papers.user_id = ?
+        """, (tag, st.session_state["user_id"]))
 
         results = c.fetchall()
         conn.close()
