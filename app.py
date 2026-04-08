@@ -4,6 +4,19 @@ import os
 import shutil
 import time
 import requests   # ← 追加
+from docx import Document
+
+def export_to_word(papers):
+    doc = Document()
+    doc.add_heading("参考文献", 0)
+
+    for i, p in enumerate(papers, start=1):
+        text = f"[{i}] {p['authors']} ({p['year']}). {p['title']}. {p['journal']}."
+        doc.add_paragraph(text)
+
+    filepath = "references.docx"
+    doc.save(filepath)
+    return filepath
 
 DB_NAME = "papers.db"
 
@@ -33,6 +46,7 @@ def init_db():
         year INTEGER,
         pdf_path TEXT,
         user_id INTEGER
+        display_order INTEGER
     )
     """)
 
@@ -87,7 +101,13 @@ if "user_id" not in st.session_state:
                 st.rerun()
             else:
                 st.error("失敗")
+    
+    try:
+        c.execute("ALTER TABLE papers ADD COLUMN display_order INTEGER")
+    except sqlite3.OperationalError:
+        pass  # すでに存在する場合は無視
 
+    conn.commit()
     conn.close()
     st.stop()
 
@@ -161,14 +181,19 @@ if menu == "追加":
             c = conn.cursor()
 
             user_id = st.session_state["user_id"]
+           
+
+            c.execute("SELECT MAX(display_order) FROM papers WHERE user_id=?", (user_id,))
+            max_order = c.fetchone()[0]
+            next_order = (max_order + 1) if max_order else 1
 
             c.execute("""
-            INSERT INTO papers (title, authors, journal, year, pdf_path, user_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (title, authors, journal, int(year), new_path, user_id))
+            INSERT INTO papers (title, authors, journal, year, pdf_path, user_id, display_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (title, authors, journal, int(year), new_path, user_id, next_order))
+
             paper_id = c.lastrowid
 
-            
             for tag in tags.split(","):
                 tag = tag.strip()
                 if tag == "":
@@ -214,20 +239,50 @@ elif menu == "一覧":
     user_id = st.session_state["user_id"]
 
     df = pd.read_sql_query(
-       "SELECT * FROM papers WHERE user_id=?",
+       "SELECT * FROM papers WHERE user_id=? ORDER BY display_order",
        conn,
        params=(user_id,)
     )
     conn.close()
 
+    sort_option = st.selectbox(
+    "並び替え",
+    ["追加順", "年（新しい順）", "年（古い順）", "タイトル"]
+    )
+
+    if sort_option == "年（新しい順）":
+        df = df.sort_values(by="year", ascending=False)
+
+    elif sort_option == "年（古い順）":
+        df = df.sort_values(by="year", ascending=True)
+
+    elif sort_option == "タイトル":
+        df = df.sort_values(by="title", ascending=True)
+
+    df = df.reset_index(drop=True)
+    df["ref_no"] = df.index + 1
+
+# 「追加順」は何もしない（そのまま）
+
     st.header("📚 論文一覧")
+
+    if st.button("📄 Word出力"):
+       papers = df.to_dict(orient="records")
+       filepath = export_to_word(papers)
+
+       with open(filepath, "rb") as f:
+          st.download_button(
+            "ダウンロード",
+            f,
+            file_name="references.docx"
+        )
 
     if df.empty:
         st.write("データがありません")
     else:
         for _, row in df.iterrows():
             with st.container():
-                st.markdown(f"### {row['title']}")
+                st.markdown(f"### [{row['ref_no']}] {row['title']}")
                 st.write(f"著者: {row['authors']}")
                 st.write(f"雑誌: {row['journal']} ({row['year']})")
 
@@ -245,7 +300,7 @@ elif menu == "一覧":
                 if tags:
                     st.write("タグ:", ", ".join(tags))
 
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4, col5, col6,= st.columns(6)
 
                 # PDF表示
                 with col1:
@@ -284,8 +339,53 @@ elif menu == "一覧":
 
                         st.success("削除しました")
                         st.rerun()
+                
+                with col4:
+                    if st.button("📋 コピー", key=f"copy_{row['id']}"):
+                        citation = f"[{row['ref_no']}] {row['authors']} ({row['year']}). {row['title']}. {row['journal']}."
+                        st.code(citation)
 
-                st.divider()
+                with col5:
+                    if st.button("⬆", key=f"up_{row['id']}"):
+                        conn = get_connection()
+                        c = conn.cursor()
+
+                        c.execute("""
+                        SELECT id, display_order FROM papers
+                        WHERE user_id=? AND display_order < ?
+                        ORDER BY display_order DESC LIMIT 1
+                        """, (user_id, row['display_order']))
+                        prev = c.fetchone()
+
+                        if prev:
+                            c.execute("UPDATE papers SET display_order=? WHERE id=?", (prev[1], row['id']))
+                            c.execute("UPDATE papers SET display_order=? WHERE id=?", (row['display_order'], prev[0]))
+                            conn.commit()
+
+                        conn.close()
+                        st.rerun()     
+
+                with col6:
+                    if st.button("⬇", key=f"down_{row['id']}"):
+                        conn = get_connection()
+                        c = conn.cursor()
+
+                        c.execute("""
+                        SELECT id, display_order FROM papers
+                        WHERE user_id=? AND display_order > ?
+                        ORDER BY display_order ASC LIMIT 1
+                        """, (user_id, row['display_order']))
+                        nxt = c.fetchone()
+
+                        if nxt:
+                           c.execute("UPDATE papers SET display_order=? WHERE id=?", (nxt[1], row['id']))
+                           c.execute("UPDATE papers SET display_order=? WHERE id=?", (row['display_order'], nxt[0]))
+                           conn.commit()
+
+                        conn.close()
+                        st.rerun()
+
+        st.divider()
 
 # -------------------
 # タグ検索
