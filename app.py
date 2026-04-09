@@ -26,6 +26,7 @@ from paper_utils import (
     move_paper,
     normalize_doi,
     save_tags_for_paper,
+    search_user_papers,
     sort_papers_dataframe,
     update_paper_details,
     upload_pdf_to_storage,
@@ -223,17 +224,8 @@ elif menu == "検索":
     keyword = st.text_input("キーワード").strip()
 
     if st.button("検索"):
-        result = fetch_user_papers(supabase, user_id, "id, title, authors, year")
+        result = search_user_papers(supabase, user_id, keyword)
         papers = result.data or []
-
-        if keyword:
-            lowered_keyword = keyword.lower()
-            papers = [
-                paper
-                for paper in papers
-                if lowered_keyword in (paper.get("title") or "").lower()
-                or lowered_keyword in (paper.get("authors") or "").lower()
-            ]
 
         if not papers:
             st.write("見つかりません")
