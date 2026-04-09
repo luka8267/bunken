@@ -56,6 +56,35 @@ def make_bibtex(row):
   doi={{{doi}}}
 }}"""
 
+def make_word_citation(row, style="APA"):
+    authors = row.get("authors", "")
+    year = row.get("year", "")
+    title = row.get("title", "")
+    journal = row.get("journal", "")
+    doi = row.get("doi", "")
+
+    if style == "APA":
+        citation = f"{authors} ({year}). {title}. {journal}."
+        if doi:
+            citation += f" https://doi.org/{doi}"
+
+    elif style == "Vancouver":
+        citation = f"{authors}. {title}. {journal}. {year}."
+        if doi:
+            citation += f" doi:{doi}"
+
+    elif style == "Nature":
+        citation = f"{authors} {title}. {journal} ({year})."
+        if doi:
+            citation += f" https://doi.org/{doi}"
+
+    else:
+        citation = f"{authors} ({year}). {title}. {journal}."
+
+    return citation
+
+
+
 # -----------------------------
 # DOI取得
 # -----------------------------
@@ -492,9 +521,9 @@ elif menu == "一覧":
                         st.rerun()
 
                 with col4:
-                    if st.button("📚 BibTeX", key=f"copy_{row['id']}"):
-                        bibtex = make_bibtex(row)
-                        st.code(bibtex, language="bibtex")
+                    if st.button("📚 引用形式", key=f"cite_{row['id']}"):
+                        citation = make_word_citation(row, style="APA")
+                        st.code(citation)
 
                 with col5:
                     if st.button("⬆", key=f"up_{row['id']}"):
