@@ -254,6 +254,21 @@ if menu == "追加":
 
     if st.button("追加"):
         user_id = st.session_state["user_id"]
+        doi = doi.strip()
+
+        if doi:
+            existing = (
+            supabase.table("papers")
+            .select("id, title")
+            .eq("user_id", user_id)
+            .eq("doi", doi)
+            .limit(1)
+            .execute()
+        )
+
+        if existing.data:
+            st.warning("このDOIの文献はすでに登録されています。")
+            st.stop()
 
     try:
         pdf_path = None
@@ -281,6 +296,7 @@ if menu == "追加":
                 "authors": authors,
                 "journal": journal,
                 "year": int(year),
+                "doi": doi if doi else None,
                 "pdf_path": pdf_path,
                 "user_id": user_id,
                 "display_order": next_order
