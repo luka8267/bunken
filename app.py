@@ -261,86 +261,86 @@ if menu == "追加":
 
         if doi:
             existing = (
-            supabase.table("papers")
-            .select("id, title")
-            .eq("user_id", user_id)
-            .eq("doi", doi)
-            .limit(1)
-            .execute()
-        )
-
-        if existing.data:
-            st.warning("このDOIの文献はすでに登録されています。")
-            st.stop()
-
-    try:
-        pdf_path = None
-        if pdf_file is not None:
-            pdf_path = upload_pdf_to_storage(pdf_file, user_id)
-
-        max_result = (
-            supabase.table("papers")
-            .select("display_order")
-            .eq("user_id", user_id)
-            .order("display_order", desc=True)
-            .limit(1)
-            .execute()
-        )
-
-        next_order = 1
-        if max_result.data:
-            current_max = max_result.data[0]["display_order"]
-            next_order = (current_max or 0) + 1
-
-        insert_result = (
-            supabase.table("papers")
-            .insert({
-                "title": title,
-                "authors": authors,
-                "journal": journal,
-                "year": int(year),
-                "doi": doi if doi else None,
-                "pdf_path": pdf_path,
-                "user_id": user_id,
-                "display_order": next_order
-            })
-            .execute()
-        )
-
-        paper_id = insert_result.data[0]["id"]
-
-        for tag in tags.split(","):
-            tag = tag.strip()
-            if tag == "":
-                continue
-
-            tag_result = (
-                supabase.table("tags")
-                .select("id")
-                .eq("name", tag)
+                supabase.table("papers")
+                .select("id, title")
+                .eq("user_id", user_id)
+                .eq("doi", doi)
+                .limit(1)
                 .execute()
             )
 
-            if tag_result.data:
-                tag_id = tag_result.data[0]["id"]
-            else:
-                new_tag = (
+            if existing.data:
+                st.warning("このDOIの文献はすでに登録されています。")
+                st.stop()
+
+        try:
+            pdf_path = None
+            if pdf_file is not None:
+                pdf_path = upload_pdf_to_storage(pdf_file, user_id)
+
+            max_result = (
+                supabase.table("papers")
+                .select("display_order")
+                .eq("user_id", user_id)
+                .order("display_order", desc=True)
+                .limit(1)
+                .execute()
+            )
+
+            next_order = 1
+            if max_result.data:
+                current_max = max_result.data[0]["display_order"]
+                next_order = (current_max or 0) + 1
+
+            insert_result = (
+                supabase.table("papers")
+                .insert({
+                    "title": title,
+                    "authors": authors,
+                    "journal": journal,
+                    "year": int(year),
+                    "doi": doi if doi else None,
+                    "pdf_path": pdf_path,
+                    "user_id": user_id,
+                    "display_order": next_order
+                })
+                .execute()
+            )
+
+            paper_id = insert_result.data[0]["id"]
+
+            for tag in tags.split(","):
+                tag = tag.strip()
+                if tag == "":
+                    continue
+
+                tag_result = (
                     supabase.table("tags")
-                    .insert({"name": tag})
+                    .select("id")
+                    .eq("name", tag)
                     .execute()
                 )
-                tag_id = new_tag.data[0]["id"]
 
-            supabase.table("paper_tags").upsert({
-                "paper_id": paper_id,
-                "tag_id": tag_id
-            }).execute()
+                if tag_result.data:
+                    tag_id = tag_result.data[0]["id"]
+                else:
+                    new_tag = (
+                        supabase.table("tags")
+                        .insert({"name": tag})
+                        .execute()
+                    )
+                    tag_id = new_tag.data[0]["id"]
 
-        st.success("追加しました！")
+                supabase.table("paper_tags").upsert({
+                    "paper_id": paper_id,
+                    "tag_id": tag_id
+                }).execute()
 
-    except Exception as e:
-        st.error(f"エラー内容: {e}")
-        st.exception(e)
+            st.success("追加しました！")
+
+        except Exception as e:
+            st.error(f"エラー内容: {e}")
+            st.exception(e)
 
 # -----------------------------
 # 検索
