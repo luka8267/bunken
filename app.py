@@ -77,6 +77,9 @@ def upload_pdf_to_storage(pdf_file, user_id):
 # Storage: 署名付きURL生成
 # -----------------------------
 def create_pdf_signed_url(storage_path, expires_in=3600):
+    if not isinstance(storage_path, str) or not storage_path.strip():
+        return None
+
     response = (
         supabase_admin.storage
         .from_(BUCKET_NAME)
@@ -430,23 +433,23 @@ elif menu == "一覧":
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
 
                 with col1:
-                    pdf_path = row.get("pdf_path")
-                    if pdf_path:
-                        signed_url = create_pdf_signed_url(pdf_path, 3600)
-                        if signed_url:
-                            st.link_button("📄 PDF", signed_url)
+                   pdf_path = row.get("pdf_path")
+                   if isinstance(pdf_path, str) and pdf_path.strip():
+                       signed_url = create_pdf_signed_url(pdf_path, 3600)
+                       if signed_url:
+                           st.link_button("📄 PDF", signed_url)
 
                 with col2:
                     pdf_path = row.get("pdf_path")
-                    if pdf_path:
-                        signed_url = create_pdf_signed_url(pdf_path, 3600)
-                        if signed_url:
+                    if isinstance(pdf_path, str) and pdf_path.strip():
+                       signed_url = create_pdf_signed_url(pdf_path, 3600)
+                       if signed_url:
                             st.link_button("👀 開く", signed_url)
 
                 with col3:
                     if st.button("🗑 削除", key=f"del_{row['id']}"):
                         pdf_path = row.get("pdf_path")
-                        if pdf_path:
+                        if isinstance(pdf_path, str) and pdf_path.strip():
                             delete_pdf_from_storage(pdf_path)
 
                         supabase.table("paper_tags").delete().eq("paper_id", row["id"]).execute()
