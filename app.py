@@ -254,13 +254,10 @@ if menu == "追加":
     if st.button("追加"):
         user_id = st.session_state["user_id"]
 
+    try:
         pdf_path = None
         if pdf_file is not None:
-            try:
-                pdf_path = upload_pdf_to_storage(pdf_file, user_id)
-            except Exception as e:
-                st.error(f"PDFアップロード失敗: {e}")
-                st.stop()
+            pdf_path = upload_pdf_to_storage(pdf_file, user_id)
 
         max_result = (
             supabase.table("papers")
@@ -320,6 +317,10 @@ if menu == "追加":
             }).execute()
 
         st.success("追加しました！")
+
+    except Exception as e:
+        st.error(f"エラー内容: {e}")
+        st.exception(e)
 
 # -----------------------------
 # 検索
