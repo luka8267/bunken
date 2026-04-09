@@ -37,6 +37,26 @@ def export_to_word(papers):
     return filepath
 
 # -----------------------------
+# BibTeX出力
+# -----------------------------
+def make_bibtex(row):
+    first_author = (row.get("authors") or "unknown").split(",")[0].strip().lower()
+    first_author = first_author.replace(" ", "")
+
+    year = row.get("year") or "0000"
+    key = f"{first_author}{year}"
+
+    doi = row.get("doi") or ""
+
+    return f"""@article{{{key},
+  title={{{row.get('title', '')}}},
+  author={{{row.get('authors', '')}}},
+  journal={{{row.get('journal', '')}}},
+  year={{{year}}},
+  doi={{{doi}}}
+}}"""
+
+# -----------------------------
 # DOI取得
 # -----------------------------
 def fetch_doi(doi):
@@ -459,9 +479,9 @@ elif menu == "一覧":
                         st.rerun()
 
                 with col4:
-                    if st.button("📋 コピー", key=f"copy_{row['id']}"):
-                        citation = f"[{row['ref_no']}] {row['authors']} ({row['year']}). {row['title']}. {row['journal']}."
-                        st.code(citation)
+                    if st.button("📚 BibTeX", key=f"copy_{row['id']}"):
+                        bibtex = make_bibtex(row)
+                        st.code(bibtex, language="bibtex")
 
                 with col5:
                     if st.button("⬆", key=f"up_{row['id']}"):
