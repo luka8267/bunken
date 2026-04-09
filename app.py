@@ -382,11 +382,15 @@ if "user_id" not in st.session_state:
     st.title("ログイン")
 
     auth_mode = st.radio("選択", ["ログイン", "新規登録"])
-    username = st.text_input("ユーザー名")
-    password = st.text_input("パスワード", type="password")
+
+    with st.form("auth_form"):
+        username = st.text_input("ユーザー名")
+        password = st.text_input("パスワード", type="password")
+        submit_label = "登録" if auth_mode == "新規登録" else "ログイン"
+        submitted = st.form_submit_button(submit_label)
 
     if auth_mode == "新規登録":
-        if st.button("登録"):
+        if submitted:
             try:
                 supabase.table("users").insert(
                     {
@@ -399,7 +403,7 @@ if "user_id" not in st.session_state:
             except Exception:
                 st.error("ユーザー名が既に存在する可能性があります")
     else:
-        if st.button("ログイン"):
+        if submitted:
             user = authenticate_user(username, password)
 
             if user:
