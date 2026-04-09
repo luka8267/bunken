@@ -43,6 +43,24 @@ def fetch_user_papers(supabase, user_id, columns="*"):
         raise
 
 
+def search_user_papers(supabase, user_id, keyword, columns="id, title, authors, year"):
+    normalized_keyword = (keyword or "").strip()
+    query = (
+        supabase.table("papers")
+        .select(columns)
+        .eq("user_id", user_id)
+        .order("display_order")
+    )
+
+    if normalized_keyword:
+        escaped_keyword = normalized_keyword.replace("%", "\\%").replace(",", "\\,")
+        query = query.or_(
+            f"title.ilike.%{escaped_keyword}%,authors.ilike.%{escaped_keyword}%"
+        )
+
+    return query.execute()
+
+
 def sort_papers_dataframe(df, sort_option):
     if df.empty:
         return df
