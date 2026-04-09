@@ -583,7 +583,7 @@ elif menu == "タグ検索":
 
                 for r in papers_result.data:
                     st.write((r["id"], r["title"]))
-                    return filepath
+                   
 
 # -----------------------------
 # BibTeX出力
