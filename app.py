@@ -60,6 +60,10 @@ def normalize_username(username):
     return (username or "").strip()
 
 
+def normalize_email(email):
+    return (email or "").strip()
+
+
 def normalize_tag_input(tags_text):
     seen = set()
     normalized = []
@@ -155,13 +159,21 @@ supabase: Client = build_supabase_client()
 
 
 def fetch_user_papers(user_id, columns="*"):
-    return (
-        supabase.table("papers")
-        .select(columns)
-        .eq("user_id", user_id)
-        .order("display_order")
-        .execute()
-    )
+    try:
+        return (
+            supabase.table("papers")
+            .select(columns)
+            .eq("user_id", user_id)
+            .order("display_order")
+            .execute()
+        )
+    except APIError as error:
+        error_text = str(error).lower()
+        if "uuid" in error_text or "user_id" in error_text:
+            raise RuntimeError(
+                "papers.user_id と認証ユーザーの紐づけ、または RLS 設定を確認してください。"
+            ) from error
+        raise
 
 
 def sort_papers_dataframe(df, sort_option):
@@ -435,7 +447,7 @@ if "user_id" not in st.session_state:
 
     if auth_mode == "新規登録":
         if submitted:
-            normalized_email = (email or "").strip()
+            normalized_email = normalize_email(email)
             normalized_username = normalize_username(username)
             if not normalized_email or not normalized_username or not password:
                 st.error("メールアドレス、ユーザー名、パスワードを入力してください。")
@@ -457,7 +469,7 @@ if "user_id" not in st.session_state:
                     st.error(f"登録失敗: {error}")
     else:
         if submitted:
-            normalized_email = (email or "").strip()
+            normalized_email = normalize_email(email)
             if not normalized_email or not password:
                 st.error("メールアドレスとパスワードを入力してください。")
             else:
