@@ -88,31 +88,67 @@ def migrate_legacy_password(user_id, password):
             .execute()
         )
         return True
-    except APIError as error:
-        if "password_hash" in str(error):
+    except APIError:
+        try:
+            (
+                supabase.table("users")
+                .update({"password_hash": hash_password(password)})
+                .eq("id", user_id)
+                .execute()
+            )
+            return True
+        except APIError:
             return False
-        raise
+
+
+def fetch_user_for_auth(username):
+    select_candidates = [
+        "id, username, password_hash, password",
+        "id, username, password_hash",
+        "id, username, password",
+    ]
+
+    for select_clause in select_candidates:
+        try:
+            return (
+                supabase.table("users")
+                .select(select_clause)
+                .eq("username", username)
+                .limit(1)
+                .execute()
+            )
+        except APIError:
+            continue
+
+    raise APIError({"message": "users table is missing required auth columns"})
+
+
+def create_user_with_password_hash(username, password):
+    insert_payloads = [
+        {
+            "username": username,
+            "password": None,
+            "password_hash": hash_password(password),
+        },
+        {
+            "username": username,
+            "password_hash": hash_password(password),
+        },
+    ]
+
+    last_error = None
+    for payload in insert_payloads:
+        try:
+            return supabase.table("users").insert(payload).execute()
+        except APIError as error:
+            last_error = error
+
+    if last_error:
+        raise last_error
 
 
 def authenticate_user(username, password):
-    try:
-        result = (
-            supabase.table("users")
-            .select("id, username, password, password_hash")
-            .eq("username", username)
-            .limit(1)
-            .execute()
-        )
-    except APIError as error:
-        if "password_hash" not in str(error):
-            raise
-        result = (
-            supabase.table("users")
-            .select("id, username, password")
-            .eq("username", username)
-            .limit(1)
-            .execute()
-        )
+    result = fetch_user_for_auth(username)
 
     if not result.data:
         return None
@@ -410,19 +446,10 @@ if "user_id" not in st.session_state:
     if auth_mode == "新規登録":
         if submitted:
             try:
-                supabase.table("users").insert(
-                    {
-                        "username": username,
-                        "password": None,
-                        "password_hash": hash_password(password),
-                    }
-                ).execute()
+                create_user_with_password_hash(username, password)
                 st.success("登録完了")
-            except APIError as error:
-                if "password_hash" in str(error):
-                    st.error("DB移行が未完了です。`users` テーブルに `password_hash` カラムを追加してください。")
-                else:
-                    st.error("ユーザー名が既に存在する可能性があります")
+            except APIError:
+                st.error("ユーザー名が既に存在するか、DB設定が不足している可能性があります")
             except Exception:
                 st.error("ユーザー名が既に存在する可能性があります")
     else:
