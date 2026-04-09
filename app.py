@@ -9,6 +9,7 @@ import pandas as pd
 import requests
 import streamlit as st
 from docx import Document
+from postgrest.exceptions import APIError
 from supabase import Client, create_client
 
 BUCKET_NAME = "paper-pdfs"
@@ -79,22 +80,39 @@ def verify_password(password, password_hash):
 
 
 def migrate_legacy_password(user_id, password):
-    (
-        supabase.table("users")
-        .update({"password_hash": hash_password(password), "password": None})
-        .eq("id", user_id)
-        .execute()
-    )
+    try:
+        (
+            supabase.table("users")
+            .update({"password_hash": hash_password(password), "password": None})
+            .eq("id", user_id)
+            .execute()
+        )
+        return True
+    except APIError as error:
+        if "password_hash" in str(error):
+            return False
+        raise
 
 
 def authenticate_user(username, password):
-    result = (
-        supabase.table("users")
-        .select("id, username, password, password_hash")
-        .eq("username", username)
-        .limit(1)
-        .execute()
-    )
+    try:
+        result = (
+            supabase.table("users")
+            .select("id, username, password, password_hash")
+            .eq("username", username)
+            .limit(1)
+            .execute()
+        )
+    except APIError as error:
+        if "password_hash" not in str(error):
+            raise
+        result = (
+            supabase.table("users")
+            .select("id, username, password")
+            .eq("username", username)
+            .limit(1)
+            .execute()
+        )
 
     if not result.data:
         return None
@@ -400,6 +418,11 @@ if "user_id" not in st.session_state:
                     }
                 ).execute()
                 st.success("登録完了")
+            except APIError as error:
+                if "password_hash" in str(error):
+                    st.error("DB移行が未完了です。`users` テーブルに `password_hash` カラムを追加してください。")
+                else:
+                    st.error("ユーザー名が既に存在する可能性があります")
             except Exception:
                 st.error("ユーザー名が既に存在する可能性があります")
     else:
