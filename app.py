@@ -16,6 +16,7 @@ BUCKET_NAME = "paper-pdfs"
 READING_STATUSES = ["未読", "読書中", "読了", "再読したい", "引用予定"]
 SORT_OPTIONS = ["追加順", "年（新しい順）", "年（古い順）", "タイトル", "ステータス"]
 DOI_FORM_FIELDS = ("title", "authors", "journal", "year")
+ADMIN_RECOVERY_SECRET_NAME = "ADMIN_RECOVERY_TOKEN"
 
 
 # -----------------------------
@@ -41,6 +42,10 @@ def get_current_user_id():
 
 def normalize_doi(doi):
     return (doi or "").strip()
+
+
+def normalize_username(username):
+    return (username or "").strip()
 
 
 def normalize_tag_input(tags_text):
@@ -147,24 +152,44 @@ def create_user_with_password_hash(username, password):
         raise last_error
 
 
+def get_admin_recovery_token():
+    return st.secrets.get(ADMIN_RECOVERY_SECRET_NAME)
+
+
+def reset_user_password_by_admin(username, new_password):
+    normalized_username = normalize_username(username)
+    password_hash = hash_password(new_password)
+
+    return (
+        supabase_admin.table("users")
+        .update({"password_hash": password_hash})
+        .eq("username", normalized_username)
+        .execute()
+    )
+
+
 def authenticate_user(username, password):
-    result = fetch_user_for_auth(username)
+    normalized_username = normalize_username(username)
+    result = fetch_user_for_auth(normalized_username)
 
     if not result.data:
-        return None
+        return None, "not_found"
 
     user = result.data[0]
     password_hash = user.get("password_hash")
 
     if password_hash and verify_password(password, password_hash):
-        return user
+        return user, "ok"
 
     legacy_password = user.get("password")
     if legacy_password and legacy_password == password:
         migrate_legacy_password(user["id"], password)
-        return user
+        return user, "ok"
 
-    return None
+    if not password_hash and not legacy_password:
+        return None, "missing_credentials"
+
+    return None, "invalid_password"
 
 
 def fetch_user_papers(user_id, columns="*"):
@@ -446,7 +471,7 @@ if "user_id" not in st.session_state:
     if auth_mode == "新規登録":
         if submitted:
             try:
-                create_user_with_password_hash(username, password)
+                create_user_with_password_hash(normalize_username(username), password)
                 st.success("登録完了")
             except APIError:
                 st.error("ユーザー名が既に存在するか、DB設定が不足している可能性があります")
@@ -454,15 +479,45 @@ if "user_id" not in st.session_state:
                 st.error("ユーザー名が既に存在する可能性があります")
     else:
         if submitted:
-            user = authenticate_user(username, password)
+            user, auth_status = authenticate_user(username, password)
 
             if user:
                 st.session_state["user_id"] = user["id"]
-                st.session_state["username"] = username
+                st.session_state["username"] = user["username"]
                 st.success("ログイン成功")
                 st.rerun()
+            elif auth_status == "missing_credentials":
+                st.error("このアカウントの認証データが見つかりません。移行前に旧パスワードが削除された可能性があります。")
             else:
                 st.error("失敗")
+
+    admin_recovery_token = get_admin_recovery_token()
+    if admin_recovery_token:
+        with st.expander("管理者用パスワード復旧"):
+            st.caption("管理トークンを使って、既存ユーザーのパスワードを再設定します。")
+            with st.form("admin_recovery_form"):
+                recovery_token = st.text_input("管理トークン", type="password")
+                recovery_username = st.text_input("復旧するユーザー名")
+                recovery_password = st.text_input("新しいパスワード", type="password")
+                recovery_submitted = st.form_submit_button("パスワードを再設定")
+
+            if recovery_submitted:
+                if recovery_token != admin_recovery_token:
+                    st.error("管理トークンが違います。")
+                elif not normalize_username(recovery_username) or not recovery_password:
+                    st.error("ユーザー名と新しいパスワードを入力してください。")
+                else:
+                    try:
+                        result = reset_user_password_by_admin(
+                            recovery_username,
+                            recovery_password,
+                        )
+                        if result.data:
+                            st.success("パスワードを再設定しました。")
+                        else:
+                            st.error("対象ユーザーが見つかりませんでした。")
+                    except Exception as error:
+                        st.error(f"復旧に失敗しました: {error}")
 
     st.stop()
 
