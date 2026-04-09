@@ -521,7 +521,7 @@ elif menu == "一覧":
                         st.rerun()
 
                 with col4:
-                    if st.button("📚 引用形式", key=f"cite_{row['id']}"):
+                    if st.button("📚 引用", key=f"cite_{row['id']}"):
                         citation = make_word_citation(row, style="APA")
                         st.code(citation)
 
