@@ -10,7 +10,6 @@ AUTH_SESSION_KEYS = (
     "email",
 )
 
-
 def clear_auth_session():
     for key in AUTH_SESSION_KEYS:
         st.session_state.pop(key, None)
