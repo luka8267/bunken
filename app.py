@@ -17,9 +17,11 @@ from auth_utils import (
 from paper_utils import (
     READING_STATUSES,
     SORT_OPTIONS,
+    build_bibliography_entries,
     create_pdf_signed_url,
     delete_paper,
     export_to_word_bytes,
+    fetch_papers_by_ids,
     fetch_user_papers,
     get_tag_map_for_papers,
     make_word_citation,
@@ -35,8 +37,30 @@ from paper_utils import (
 DOI_FORM_FIELDS = ("title", "authors", "journal", "year")
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+BIBLIOGRAPHY_STYLES = ["APA", "Vancouver", "Nature"]
 
 supabase: Client = build_supabase_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+if "bibliography_paper_ids" not in st.session_state:
+    st.session_state["bibliography_paper_ids"] = []
+
+
+def add_paper_to_bibliography(paper_id):
+    if paper_id not in st.session_state["bibliography_paper_ids"]:
+        st.session_state["bibliography_paper_ids"].append(paper_id)
+
+
+def remove_paper_from_bibliography(paper_id):
+    st.session_state["bibliography_paper_ids"] = [
+        current_id
+        for current_id in st.session_state["bibliography_paper_ids"]
+        if current_id != paper_id
+    ]
+
+
+def clear_bibliography():
+    st.session_state["bibliography_paper_ids"] = []
 
 
 def fetch_doi(doi):
@@ -133,9 +157,10 @@ if st.sidebar.button("ログアウト"):
 st.sidebar.write(f"ログイン中: {st.session_state.get('username', '')}")
 if st.session_state.get("email"):
     st.sidebar.caption(st.session_state["email"])
+st.sidebar.write(f"参考文献候補: {len(st.session_state['bibliography_paper_ids'])}件")
 
 st.title("📚 文献管理アプリ")
-menu = st.sidebar.selectbox("メニュー", ["追加", "検索", "一覧", "タグ検索"])
+menu = st.sidebar.selectbox("メニュー", ["追加", "検索", "一覧", "タグ検索", "参考文献"])
 
 
 if menu == "追加":
@@ -279,7 +304,8 @@ elif menu == "一覧":
                 if tags_list:
                     st.write("タグ:", ", ".join(tags_list))
 
-                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                in_bibliography = row_dict["id"] in st.session_state["bibliography_paper_ids"]
+                col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
                 with col1:
                     if signed_url:
@@ -300,11 +326,21 @@ elif menu == "一覧":
                         st.code(make_word_citation(row_dict, style="APA"))
 
                 with col5:
+                    if in_bibliography:
+                        if st.button("➖ 参考文献", key=f"bib_remove_{row_dict['id']}"):
+                            remove_paper_from_bibliography(row_dict["id"])
+                            st.rerun()
+                    else:
+                        if st.button("➕ 参考文献", key=f"bib_add_{row_dict['id']}"):
+                            add_paper_to_bibliography(row_dict["id"])
+                            st.rerun()
+
+                with col6:
                     if st.button("⬆", key=f"up_{row_dict['id']}"):
                         move_paper(supabase, user_id, row_dict["id"], row_dict["display_order"], "up")
                         st.rerun()
 
-                with col6:
+                with col7:
                     if st.button("⬇", key=f"down_{row_dict['id']}"):
                         move_paper(
                             supabase,
@@ -393,3 +429,57 @@ elif menu == "タグ検索":
                 else:
                     for paper in papers_result.data:
                         st.write((paper["id"], paper["title"]))
+
+
+elif menu == "参考文献":
+    user_id = get_current_user_id()
+    st.header("参考文献")
+
+    style = st.selectbox("引用スタイル", BIBLIOGRAPHY_STYLES)
+    bibliography_ids = st.session_state["bibliography_paper_ids"]
+    bibliography_papers = fetch_papers_by_ids(
+        supabase,
+        user_id,
+        bibliography_ids,
+        "id, title, authors, journal, year, doi",
+    )
+
+    if len(bibliography_papers) != len(bibliography_ids):
+        valid_ids = [paper["id"] for paper in bibliography_papers]
+        st.session_state["bibliography_paper_ids"] = valid_ids
+        bibliography_ids = valid_ids
+
+    if not bibliography_papers:
+        st.write("一覧画面の「➕ 参考文献」から文献を追加してください。")
+    else:
+        entries = build_bibliography_entries(bibliography_papers, style=style, numbered=True)
+        word_bytes = export_to_word_bytes(
+            bibliography_papers,
+            style=style,
+            title="参考文献",
+            numbered=True,
+        )
+        st.download_button(
+            "📄 Word出力",
+            data=word_bytes,
+            file_name="bibliography.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        st.download_button(
+            "📝 テキスト出力",
+            data="\n".join(entries),
+            file_name="bibliography.txt",
+            mime="text/plain",
+        )
+
+        if st.button("🧹 参考文献をクリア"):
+            clear_bibliography()
+            st.rerun()
+
+        for paper, entry in zip(bibliography_papers, entries):
+            with st.container():
+                st.write(entry)
+                if st.button("削除", key=f"remove_bibliography_{paper['id']}"):
+                    remove_paper_from_bibliography(paper["id"])
+                    st.rerun()
+                st.divider()
