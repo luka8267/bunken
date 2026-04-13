@@ -106,21 +106,43 @@ def make_word_citation(row, style="APA"):
     return citation
 
 
-def export_to_word_bytes(papers):
-    doc = Document()
-    doc.add_heading("参考文献", 0)
-
+def build_bibliography_entries(papers, style="APA", numbered=True):
+    entries = []
     for index, paper in enumerate(papers, start=1):
-        text = (
-            f"[{index}] {paper.get('authors', '')} ({paper.get('year', '')}). "
-            f"{paper.get('title', '')}. {paper.get('journal', '')}."
-        )
-        doc.add_paragraph(text)
+        citation = make_word_citation(paper, style=style)
+        if numbered:
+            citation = f"[{index}] {citation}"
+        entries.append(citation)
+    return entries
+
+
+def export_to_word_bytes(papers, style="APA", title="参考文献", numbered=True):
+    doc = Document()
+    doc.add_heading(title, 0)
+
+    for entry in build_bibliography_entries(papers, style=style, numbered=numbered):
+        doc.add_paragraph(entry)
 
     buffer = io.BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
+
+
+def fetch_papers_by_ids(supabase, user_id, paper_ids, columns="*"):
+    if not paper_ids:
+        return []
+
+    result = (
+        supabase.table("papers")
+        .select(columns)
+        .eq("user_id", user_id)
+        .in_("id", paper_ids)
+        .execute()
+    )
+
+    papers_by_id = {paper["id"]: paper for paper in (result.data or [])}
+    return [papers_by_id[paper_id] for paper_id in paper_ids if paper_id in papers_by_id]
 
 
 def upload_pdf_to_storage(supabase, pdf_file, user_id):
