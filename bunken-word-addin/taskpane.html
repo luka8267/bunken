@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>bunken Word</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg-top: #f8f6f0;
+        --bg-bottom: #efebe2;
+        --card: rgba(255, 255, 255, 0.9);
+        --text: #1f2933;
+        --muted: #52606d;
+        --primary: #0f766e;
+        --secondary: #fff7ed;
+        --secondary-text: #7c2d12;
+        --line: #d9e2ec;
+        --selected: #e0f2fe;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 20px;
+        font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+        background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+        color: var(--text);
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+        margin-bottom: 16px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .subtitle {
+        margin: 6px 0 0;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .badge {
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        background: #fde68a;
+      }
+
+      .badge.ready {
+        background: #d9f99d;
+      }
+
+      .card {
+        margin-bottom: 14px;
+        padding: 16px;
+        border-radius: 18px;
+        background: var(--card);
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 17px;
+      }
+
+      input {
+        width: 100%;
+        padding: 11px 12px;
+        border-radius: 12px;
+        border: 1px solid #cbd2d9;
+        font-size: 14px;
+        background: #fffdf8;
+      }
+
+      .message, .status {
+        margin: 10px 0 12px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .paper-item {
+        text-align: left;
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 12px;
+        cursor: pointer;
+      }
+
+      .paper-item.selected {
+        border-color: #127fbf;
+        background: var(--selected);
+      }
+
+      .paper-title {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+        color: #102a43;
+      }
+
+      .paper-meta {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .button {
+        width: 100%;
+        padding: 12px;
+        border-radius: 999px;
+        border: none;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .button.primary {
+        background: var(--primary);
+        color: #fff;
+      }
+
+      .button.secondary {
+        border: 1px solid #1f2937;
+        background: var(--secondary);
+        color: var(--secondary-text);
+      }
+
+      .button:disabled,
+      input:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="header">
+        <div>
+          <h1 class="title">bunken Word</h1>
+          <p class="subtitle">Word で引用と参考文献を管理します。</p>
+        </div>
+        <span id="ready-badge" class="badge">Loading</span>
+      </header>
+
+      <section class="card">
+        <h2>文献検索</h2>
+        <input id="search-input" placeholder="例: Suzuki 2024" />
+        <p id="search-message" class="message">タイトル、著者、雑誌名で検索できます。</p>
+        <div id="search-results" class="list"></div>
+      </section>
+
+      <section class="card">
+        <h2>引用挿入</h2>
+        <p id="selection-message" class="message">文献を選択すると引用を挿入できます。</p>
+        <input id="locator-input" placeholder="例: p. 25" />
+        <div style="height: 12px;"></div>
+        <button id="insert-citation-button" class="button primary">本文に引用を挿入</button>
+      </section>
+
+      <section class="card">
+        <h2>参考文献</h2>
+        <p class="message">文書内の引用情報を集めて、文末の参考文献ブロックを再生成します。</p>
+        <button id="refresh-bibliography-button" class="button secondary">参考文献を更新</button>
+      </section>
+
+      <footer id="status" class="status">Word を待機中です。</footer>
+    </main>
+    <script src="./taskpane.js"></script>
+  </body>
+  </html>
