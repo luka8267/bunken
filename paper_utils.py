@@ -1,11 +1,15 @@
 import io
 import os
-import time
+import re
+import unicodedata
+import uuid
 
 from docx import Document
 from postgrest.exceptions import APIError
 
 BUCKET_NAME = "paper-pdfs"
+SAFE_STORAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+MAX_STORAGE_BASENAME_LENGTH = 80
 READING_STATUSES = ["未読", "読書中", "読了", "再読したい", "引用予定"]
 SORT_OPTIONS = ["追加順", "年（新しい順）", "年（古い順）", "タイトル", "ステータス"]
 
@@ -23,6 +27,18 @@ def normalize_tag_input(tags_text):
             seen.add(value)
             normalized.append(value)
     return normalized
+
+
+def make_safe_storage_filename(filename):
+    name, ext = os.path.splitext(filename or "")
+    ext = ext.lower() if ext.lower() == ".pdf" else ".pdf"
+
+    normalized_name = unicodedata.normalize("NFKD", name)
+    ascii_name = normalized_name.encode("ascii", "ignore").decode("ascii")
+    safe_name = SAFE_STORAGE_NAME_RE.sub("-", ascii_name).strip(".-_")
+    safe_name = safe_name[:MAX_STORAGE_BASENAME_LENGTH].strip(".-_") or "paper"
+
+    return f"{uuid.uuid4().hex}_{safe_name}{ext}"
 
 
 def fetch_user_papers(supabase, user_id, columns="*"):
@@ -124,9 +140,7 @@ def export_to_word_bytes(papers):
 
 
 def upload_pdf_to_storage(supabase, pdf_file, user_id):
-    filename = pdf_file.name
-    name, ext = os.path.splitext(filename)
-    safe_name = f"{name}_{int(time.time())}{ext}"
+    safe_name = make_safe_storage_filename(getattr(pdf_file, "name", "paper.pdf"))
     storage_path = f"{user_id}/{safe_name}"
 
     supabase.storage.from_(BUCKET_NAME).upload(
