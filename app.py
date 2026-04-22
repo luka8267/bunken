@@ -97,7 +97,10 @@ class MetadataParser(HTMLParser):
 
 
 def normalize_url(url):
-    normalized_url = (url or "").strip()
+    if not isinstance(url, str):
+        return ""
+
+    normalized_url = url.strip()
     if normalized_url and not re.match(r"^https?://", normalized_url, re.IGNORECASE):
         normalized_url = f"https://{normalized_url}"
     return normalized_url
@@ -421,7 +424,7 @@ elif menu == "一覧":
             signed_url = create_pdf_signed_url(supabase, pdf_path, 3600)
             supporting_path = row_dict.get("supporting_path")
             supporting_url = create_pdf_signed_url(supabase, supporting_path, 3600)
-            paper_url = row_dict.get("url") or ""
+            paper_url = normalize_url(row_dict.get("url"))
 
             with st.container():
                 st.markdown(f"### [{row_dict['ref_no']}] {row_dict['title']}")
