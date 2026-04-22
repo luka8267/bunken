@@ -9,6 +9,7 @@ from postgrest.exceptions import APIError
 
 BUCKET_NAME = "paper-pdfs"
 SAFE_STORAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+SAFE_STORAGE_EXT_RE = re.compile(r"[^A-Za-z0-9]")
 MAX_STORAGE_BASENAME_LENGTH = 80
 READING_STATUSES = ["未読", "読書中", "読了", "再読したい", "引用予定"]
 SORT_OPTIONS = ["追加順", "年（新しい順）", "年（古い順）", "タイトル", "ステータス"]
@@ -29,9 +30,16 @@ def normalize_tag_input(tags_text):
     return normalized
 
 
-def make_safe_storage_filename(filename):
+def is_storage_path(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def make_safe_storage_filename(filename, default_ext=".pdf"):
     name, ext = os.path.splitext(filename or "")
-    ext = ext.lower() if ext.lower() == ".pdf" else ".pdf"
+    ext = ext.lower()
+    if ext:
+        ext = f".{SAFE_STORAGE_EXT_RE.sub('', ext.lstrip('.'))}"
+    ext = ext if ext and ext != "." else default_ext
 
     normalized_name = unicodedata.normalize("NFKD", name)
     ascii_name = normalized_name.encode("ascii", "ignore").decode("ascii")
@@ -139,16 +147,42 @@ def export_to_word_bytes(papers):
     return buffer
 
 
-def upload_pdf_to_storage(supabase, pdf_file, user_id):
-    safe_name = make_safe_storage_filename(getattr(pdf_file, "name", "paper.pdf"))
-    storage_path = f"{user_id}/{safe_name}"
+def upload_file_to_storage(
+    supabase,
+    uploaded_file,
+    user_id,
+    folder,
+    default_ext=".bin",
+    default_content_type="application/octet-stream",
+):
+    safe_name = make_safe_storage_filename(
+        getattr(uploaded_file, "name", "attachment"),
+        default_ext=default_ext,
+    )
+    storage_path = f"{user_id}/{folder}/{safe_name}"
+    content_type = getattr(uploaded_file, "type", None) or default_content_type
 
     supabase.storage.from_(BUCKET_NAME).upload(
         path=storage_path,
-        file=pdf_file.read(),
-        file_options={"content-type": "application/pdf"},
+        file=uploaded_file.read(),
+        file_options={"content-type": content_type},
     )
     return storage_path
+
+
+def upload_pdf_to_storage(supabase, pdf_file, user_id):
+    return upload_file_to_storage(
+        supabase,
+        pdf_file,
+        user_id,
+        "pdfs",
+        default_ext=".pdf",
+        default_content_type="application/pdf",
+    )
+
+
+def upload_supporting_file_to_storage(supabase, supporting_file, user_id):
+    return upload_file_to_storage(supabase, supporting_file, user_id, "supporting")
 
 
 def create_pdf_signed_url(supabase, storage_path, expires_in=3600):
@@ -168,7 +202,7 @@ def create_pdf_signed_url(supabase, storage_path, expires_in=3600):
 
 
 def delete_pdf_from_storage(supabase, storage_path):
-    if storage_path:
+    if is_storage_path(storage_path):
         supabase.storage.from_(BUCKET_NAME).remove([storage_path])
 
 
@@ -272,10 +306,39 @@ def update_paper_details(supabase, user_id, paper_id, status, notes):
     )
 
 
+def update_paper_files(
+    supabase,
+    user_id,
+    paper_id,
+    pdf_path=None,
+    supporting_path=None,
+):
+    fields = {}
+    if pdf_path is not None:
+        fields["pdf_path"] = pdf_path
+    if supporting_path is not None:
+        fields["supporting_path"] = supporting_path
+
+    if not fields:
+        return
+
+    (
+        supabase.table("papers")
+        .update(fields)
+        .eq("id", paper_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
 def delete_paper(supabase, user_id, row):
     pdf_path = row.get("pdf_path")
-    if isinstance(pdf_path, str) and pdf_path.strip():
+    if is_storage_path(pdf_path):
         delete_pdf_from_storage(supabase, pdf_path)
+
+    supporting_path = row.get("supporting_path")
+    if is_storage_path(supporting_path):
+        delete_pdf_from_storage(supabase, supporting_path)
 
     supabase.table("paper_tags").delete().eq("paper_id", row["id"]).execute()
     (

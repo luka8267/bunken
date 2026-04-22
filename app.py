@@ -19,6 +19,7 @@ from paper_utils import (
     SORT_OPTIONS,
     create_pdf_signed_url,
     delete_paper,
+    delete_pdf_from_storage,
     export_to_word_bytes,
     fetch_user_papers,
     get_tag_map_for_papers,
@@ -29,10 +30,24 @@ from paper_utils import (
     search_user_papers,
     sort_papers_dataframe,
     update_paper_details,
+    update_paper_files,
     upload_pdf_to_storage,
+    upload_supporting_file_to_storage,
 )
 
 DOI_FORM_FIELDS = ("title", "authors", "journal", "year")
+SUPPORTING_FILE_TYPES = [
+    "pdf",
+    "zip",
+    "docx",
+    "xlsx",
+    "xls",
+    "csv",
+    "txt",
+    "png",
+    "jpg",
+    "jpeg",
+]
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
@@ -147,6 +162,10 @@ if menu == "追加":
     journal = st.text_input("雑誌", value=st.session_state.get("journal", ""))
     year = st.number_input("年", value=int(st.session_state.get("year", 2024)), step=1)
     pdf_file = st.file_uploader("PDFアップロード", type=["pdf"])
+    supporting_file = st.file_uploader(
+        "サポーティング資料アップロード",
+        type=SUPPORTING_FILE_TYPES,
+    )
     doi = st.text_input("DOI")
 
     if st.button("DOIから自動入力"):
@@ -180,6 +199,11 @@ if menu == "追加":
 
         try:
             pdf_path = upload_pdf_to_storage(supabase, pdf_file, user_id) if pdf_file else None
+            supporting_path = (
+                upload_supporting_file_to_storage(supabase, supporting_file, user_id)
+                if supporting_file
+                else None
+            )
 
             max_result = (
                 supabase.table("papers")
@@ -202,6 +226,7 @@ if menu == "追加":
                         "year": int(year),
                         "doi": normalized_doi or None,
                         "pdf_path": pdf_path,
+                        "supporting_path": supporting_path,
                         "user_id": user_id,
                         "display_order": next_order,
                         "status": status,
@@ -262,6 +287,8 @@ elif menu == "一覧":
             row_dict = row.to_dict()
             pdf_path = row_dict.get("pdf_path")
             signed_url = create_pdf_signed_url(supabase, pdf_path, 3600)
+            supporting_path = row_dict.get("supporting_path")
+            supporting_url = create_pdf_signed_url(supabase, supporting_path, 3600)
 
             with st.container():
                 st.markdown(f"### [{row_dict['ref_no']}] {row_dict['title']}")
@@ -279,32 +306,36 @@ elif menu == "一覧":
                 if tags_list:
                     st.write("タグ:", ", ".join(tags_list))
 
-                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
                 with col1:
                     if signed_url:
                         st.link_button("📄 PDF", signed_url)
 
                 with col2:
+                    if supporting_url:
+                        st.link_button("資料", supporting_url)
+
+                with col3:
                     if signed_url:
                         st.link_button("👀 開く", signed_url)
 
-                with col3:
+                with col4:
                     if st.button("🗑 削除", key=f"del_{row_dict['id']}"):
                         delete_paper(supabase, user_id, row_dict)
                         st.success("削除しました")
                         st.rerun()
 
-                with col4:
+                with col5:
                     if st.button("📚 引用", key=f"cite_{row_dict['id']}"):
                         st.code(make_word_citation(row_dict, style="APA"))
 
-                with col5:
+                with col6:
                     if st.button("⬆", key=f"up_{row_dict['id']}"):
                         move_paper(supabase, user_id, row_dict["id"], row_dict["display_order"], "up")
                         st.rerun()
 
-                with col6:
+                with col7:
                     if st.button("⬇", key=f"down_{row_dict['id']}"):
                         move_paper(
                             supabase,
@@ -335,9 +366,33 @@ elif menu == "一覧":
                         height=150,
                         key=f"notes_{row_dict['id']}",
                     )
+                    new_pdf_file = st.file_uploader(
+                        "PDFを追加・差し替え",
+                        type=["pdf"],
+                        key=f"pdf_upload_{row_dict['id']}",
+                    )
+                    new_supporting_file = st.file_uploader(
+                        "サポーティング資料を追加・差し替え",
+                        type=SUPPORTING_FILE_TYPES,
+                        key=f"supporting_upload_{row_dict['id']}",
+                    )
 
                     if st.button("💾 保存", key=f"save_{row_dict['id']}"):
                         try:
+                            new_pdf_path = (
+                                upload_pdf_to_storage(supabase, new_pdf_file, user_id)
+                                if new_pdf_file
+                                else None
+                            )
+                            new_supporting_path = (
+                                upload_supporting_file_to_storage(
+                                    supabase,
+                                    new_supporting_file,
+                                    user_id,
+                                )
+                                if new_supporting_file
+                                else None
+                            )
                             update_paper_details(
                                 supabase,
                                 user_id,
@@ -345,6 +400,21 @@ elif menu == "一覧":
                                 edit_status,
                                 edit_notes,
                             )
+                            update_paper_files(
+                                supabase,
+                                user_id,
+                                row_dict["id"],
+                                pdf_path=new_pdf_path,
+                                supporting_path=new_supporting_path,
+                            )
+                            if new_pdf_path and isinstance(pdf_path, str) and pdf_path.strip():
+                                delete_pdf_from_storage(supabase, pdf_path)
+                            if (
+                                new_supporting_path
+                                and isinstance(supporting_path, str)
+                                and supporting_path.strip()
+                            ):
+                                delete_pdf_from_storage(supabase, supporting_path)
                             st.success("更新しました")
                             st.rerun()
                         except Exception as error:
