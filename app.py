@@ -1,3 +1,7 @@
+import re
+from html.parser import HTMLParser
+from urllib.parse import unquote
+
 import pandas as pd
 import requests
 import streamlit as st
@@ -36,6 +40,8 @@ from paper_utils import (
 )
 
 DOI_FORM_FIELDS = ("title", "authors", "journal", "year")
+DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.IGNORECASE)
+URL_FORM_FIELDS = ("title", "authors", "journal", "year", "doi")
 SUPPORTING_FILE_TYPES = [
     "pdf",
     "zip",
@@ -52,6 +58,56 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
 supabase: Client = build_supabase_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+class MetadataParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.meta = {}
+        self.in_title = False
+        self.title_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = {key.lower(): value for key, value in attrs if value is not None}
+        if tag.lower() == "title":
+            self.in_title = True
+        if tag.lower() != "meta":
+            return
+
+        key = (
+            attrs_dict.get("name")
+            or attrs_dict.get("property")
+            or attrs_dict.get("itemprop")
+        )
+        content = attrs_dict.get("content")
+        if key and content:
+            self.meta.setdefault(key.lower(), []).append(content.strip())
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "title":
+            self.in_title = False
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.title_parts.append(data.strip())
+
+    @property
+    def page_title(self):
+        return " ".join(part for part in self.title_parts if part).strip()
+
+
+def normalize_url(url):
+    normalized_url = (url or "").strip()
+    if normalized_url and not re.match(r"^https?://", normalized_url, re.IGNORECASE):
+        normalized_url = f"https://{normalized_url}"
+    return normalized_url
+
+
+def extract_doi(text):
+    match = DOI_RE.search(unquote(text or ""))
+    if not match:
+        return ""
+    return match.group(0).rstrip(").,;]")
 
 
 def fetch_doi(doi):
@@ -77,6 +133,70 @@ def fetch_doi(doi):
     year = issued[0][0] if issued and issued[0] else 0
 
     return title, authors, journal, year
+
+
+def fetch_url_metadata(url):
+    normalized_url = normalize_url(url)
+    if not normalized_url:
+        return None
+
+    doi_from_url = extract_doi(normalized_url)
+    if doi_from_url:
+        doi_result = fetch_doi(doi_from_url)
+        if doi_result:
+            return (*doi_result, doi_from_url)
+
+    try:
+        response = requests.get(
+            normalized_url,
+            headers={"User-Agent": "bunken/1.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    parser = MetadataParser()
+    parser.feed(response.text[:300000])
+    meta = parser.meta
+
+    doi_from_page = extract_doi(response.url) or extract_doi(response.text[:300000])
+    if doi_from_page:
+        doi_result = fetch_doi(doi_from_page)
+        if doi_result:
+            return (*doi_result, doi_from_page)
+
+    def first(*keys):
+        for key in keys:
+            values = meta.get(key.lower())
+            if values:
+                return values[0]
+        return ""
+
+    title = first("citation_title", "dc.title", "og:title") or parser.page_title
+    authors = ", ".join(meta.get("citation_author", [])) or first("author", "dc.creator")
+    journal = first(
+        "citation_journal_title",
+        "citation_conference_title",
+        "dc.source",
+        "og:site_name",
+    )
+    year_text = first(
+        "citation_publication_date",
+        "citation_online_date",
+        "citation_date",
+        "dc.date",
+        "article:published_time",
+    )
+    year_match = re.search(r"\d{4}", year_text or "")
+    year = int(year_match.group(0)) if year_match else 0
+    doi = first("citation_doi", "dc.identifier")
+    doi = extract_doi(doi) or doi
+
+    if not any([title, authors, journal, year, doi]):
+        return None
+
+    return title, authors, journal, year, doi
 
 
 if "user_id" not in st.session_state:
@@ -166,7 +286,8 @@ if menu == "追加":
         "サポーティング資料アップロード",
         type=SUPPORTING_FILE_TYPES,
     )
-    doi = st.text_input("DOI")
+    doi = st.text_input("DOI", value=st.session_state.get("doi", ""))
+    url = st.text_input("URL", value=st.session_state.get("url", ""))
 
     if st.button("DOIから自動入力"):
         result = fetch_doi(doi)
@@ -176,12 +297,22 @@ if menu == "追加":
             st.rerun()
         st.error("取得失敗")
 
+    if st.button("URLから自動入力"):
+        result = fetch_url_metadata(url)
+        if result:
+            for field_name, value in zip(URL_FORM_FIELDS, result):
+                st.session_state[field_name] = value
+            st.session_state["url"] = normalize_url(url)
+            st.rerun()
+        st.error("取得失敗")
+
     tags = st.text_input("タグ（カンマ区切り）")
     status = st.selectbox("読書ステータス", READING_STATUSES)
     notes = st.text_area("抄録メモ", height=150)
 
     if st.button("追加"):
         normalized_doi = normalize_doi(doi)
+        normalized_url = normalize_url(url)
 
         if normalized_doi:
             existing = (
@@ -225,6 +356,7 @@ if menu == "追加":
                         "journal": journal,
                         "year": int(year),
                         "doi": normalized_doi or None,
+                        "url": normalized_url or None,
                         "pdf_path": pdf_path,
                         "supporting_path": supporting_path,
                         "user_id": user_id,
@@ -289,6 +421,7 @@ elif menu == "一覧":
             signed_url = create_pdf_signed_url(supabase, pdf_path, 3600)
             supporting_path = row_dict.get("supporting_path")
             supporting_url = create_pdf_signed_url(supabase, supporting_path, 3600)
+            paper_url = row_dict.get("url") or ""
 
             with st.container():
                 st.markdown(f"### [{row_dict['ref_no']}] {row_dict['title']}")
@@ -301,6 +434,9 @@ elif menu == "一覧":
                 if row_dict.get("notes"):
                     st.write("メモ:")
                     st.write(row_dict["notes"])
+
+                if paper_url:
+                    st.link_button("Webページ", paper_url)
 
                 tags_list = tag_map.get(row_dict["id"], [])
                 if tags_list:
@@ -366,6 +502,11 @@ elif menu == "一覧":
                         height=150,
                         key=f"notes_{row_dict['id']}",
                     )
+                    edit_url = st.text_input(
+                        "URL",
+                        value=paper_url,
+                        key=f"url_{row_dict['id']}",
+                    )
                     new_pdf_file = st.file_uploader(
                         "PDFを追加・差し替え",
                         type=["pdf"],
@@ -399,6 +540,7 @@ elif menu == "一覧":
                                 row_dict["id"],
                                 edit_status,
                                 edit_notes,
+                                normalize_url(edit_url) or None,
                             )
                             update_paper_files(
                                 supabase,

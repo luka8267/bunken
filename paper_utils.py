@@ -300,10 +300,14 @@ def move_paper(supabase, user_id, paper_id, display_order, direction):
     )
 
 
-def update_paper_details(supabase, user_id, paper_id, status, notes):
+def update_paper_details(supabase, user_id, paper_id, status, notes, url=None):
+    fields = {"status": status, "notes": notes}
+    if url is not None:
+        fields["url"] = url
+
     (
         supabase.table("papers")
-        .update({"status": status, "notes": notes})
+        .update(fields)
         .eq("id", paper_id)
         .eq("user_id", user_id)
         .execute()
