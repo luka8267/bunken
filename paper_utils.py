@@ -5,7 +5,11 @@ import unicodedata
 import uuid
 
 from docx import Document
-from postgrest.exceptions import APIError
+
+try:
+    from postgrest.exceptions import APIError
+except ImportError:
+    APIError = Exception
 
 BUCKET_NAME = "paper-pdfs"
 SAFE_STORAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
