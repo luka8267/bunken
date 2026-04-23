@@ -1,6 +1,9 @@
+import ipaddress
+import logging
 import re
+import socket
 from html.parser import HTMLParser
-from urllib.parse import unquote
+from urllib.parse import unquote, urljoin, urlparse
 
 import pandas as pd
 import requests
@@ -56,8 +59,11 @@ SUPPORTING_FILE_TYPES = [
 ]
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+MAX_METADATA_REDIRECTS = 3
+METADATA_FETCH_BYTES = 300000
 
 supabase: Client = build_supabase_client(SUPABASE_URL, SUPABASE_KEY)
+logger = logging.getLogger(__name__)
 
 
 class MetadataParser(HTMLParser):
@@ -106,6 +112,61 @@ def normalize_url(url):
     return normalized_url
 
 
+def is_public_http_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+
+    hostname = parsed.hostname.strip().lower()
+    if hostname in {"localhost", "localhost.localdomain"}:
+        return False
+
+    try:
+        addresses = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return False
+
+    for address in {item[4][0] for item in addresses}:
+        try:
+            ip_address = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+
+        if not ip_address.is_global:
+            return False
+
+    return True
+
+
+def fetch_public_url(url):
+    current_url = normalize_url(url)
+    if not is_public_http_url(current_url):
+        return None
+
+    session = requests.Session()
+    for _ in range(MAX_METADATA_REDIRECTS + 1):
+        response = session.get(
+            current_url,
+            headers={"User-Agent": "bunken/1.0"},
+            timeout=15,
+            allow_redirects=False,
+        )
+
+        if response.is_redirect:
+            next_url = response.headers.get("Location")
+            if not next_url:
+                return None
+            current_url = urljoin(current_url, next_url)
+            if not is_public_http_url(current_url):
+                return None
+            continue
+
+        response.raise_for_status()
+        return response
+
+    return None
+
+
 def extract_doi(text):
     match = DOI_RE.search(unquote(text or ""))
     if not match:
@@ -140,7 +201,7 @@ def fetch_doi(doi):
 
 def fetch_url_metadata(url):
     normalized_url = normalize_url(url)
-    if not normalized_url:
+    if not normalized_url or not is_public_http_url(normalized_url):
         return None
 
     doi_from_url = extract_doi(normalized_url)
@@ -150,20 +211,19 @@ def fetch_url_metadata(url):
             return (*doi_result, doi_from_url)
 
     try:
-        response = requests.get(
-            normalized_url,
-            headers={"User-Agent": "bunken/1.0"},
-            timeout=15,
-        )
-        response.raise_for_status()
+        response = fetch_public_url(normalized_url)
     except requests.RequestException:
         return None
 
+    if response is None:
+        return None
+
     parser = MetadataParser()
-    parser.feed(response.text[:300000])
+    html_text = response.text[:METADATA_FETCH_BYTES]
+    parser.feed(html_text)
     meta = parser.meta
 
-    doi_from_page = extract_doi(response.url) or extract_doi(response.text[:300000])
+    doi_from_page = extract_doi(response.url) or extract_doi(html_text)
     if doi_from_page:
         doi_result = fetch_doi(doi_from_page)
         if doi_result:
@@ -374,9 +434,9 @@ if menu == "追加":
             paper_id = insert_result.data[0]["id"]
             save_tags_for_paper(supabase, paper_id, tags)
             st.success("追加しました！")
-        except Exception as error:
-            st.error(f"エラー内容: {error}")
-            st.exception(error)
+        except Exception:
+            logger.exception("Failed to add paper")
+            st.error("保存に失敗しました。入力内容とログを確認してください。")
 
 
 elif menu == "検索":
@@ -562,8 +622,9 @@ elif menu == "一覧":
                                 delete_pdf_from_storage(supabase, supporting_path)
                             st.success("更新しました")
                             st.rerun()
-                        except Exception as error:
-                            st.error(f"更新失敗: {error}")
+                        except Exception:
+                            logger.exception("Failed to update paper")
+                            st.error("更新に失敗しました。入力内容とログを確認してください。")
 
                 st.divider()
 

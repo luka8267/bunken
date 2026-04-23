@@ -1,6 +1,10 @@
 import streamlit as st
-from postgrest.exceptions import APIError
 from supabase import create_client
+
+try:
+    from postgrest.exceptions import APIError
+except ImportError:
+    APIError = Exception
 
 AUTH_SESSION_KEYS = (
     "access_token",
