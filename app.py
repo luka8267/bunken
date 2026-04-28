@@ -75,7 +75,15 @@ def promote_url_fragment_to_query_params():
         """
         <script>
         const hash = window.parent.location.hash;
-        if (hash && hash.includes("access_token")) {
+        if (
+            hash
+            && (
+                hash.includes("access_token")
+                || hash.includes("refresh_token")
+                || hash.includes("token_hash")
+                || hash.includes("error")
+            )
+        ) {
             const params = new URLSearchParams(hash.substring(1));
             const url = new URL(window.parent.location.href);
             params.forEach((value, key) => url.searchParams.set(key, value));
@@ -93,6 +101,26 @@ def get_query_param(name):
     if isinstance(value, list):
         return value[0] if value else None
     return value
+
+
+def show_auth_callback_error():
+    error_code = get_query_param("error_code") or get_query_param("error")
+    error_description = get_query_param("error_description")
+    if not error_code and not error_description:
+        return False
+
+    st.title("パスワード再設定")
+    if error_code == "otp_expired":
+        st.error("再設定リンクの有効期限が切れているか、すでに使用されています。")
+        st.info("新しい再設定メールを送信して、最新のメールにあるリンクを開いてください。")
+    else:
+        message = unquote(error_description or error_code)
+        st.error(f"再設定リンクを確認できませんでした: {message}")
+
+    if st.button("再設定メールを送り直す"):
+        st.query_params.clear()
+        st.rerun()
+    return True
 
 
 def get_password_reset_redirect_url():
@@ -377,6 +405,9 @@ def fetch_url_metadata(url):
 
 if "user_id" not in st.session_state:
     promote_url_fragment_to_query_params()
+
+    if show_auth_callback_error():
+        st.stop()
 
     reset_type = get_query_param("type")
     if reset_type == "recovery" or get_query_param("access_token"):
