@@ -8,6 +8,7 @@ from urllib.parse import unquote, urljoin, urlparse
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import Client
 
 from auth_utils import (
@@ -17,9 +18,12 @@ from auth_utils import (
     normalize_email,
     normalize_username,
     register_user,
+    request_password_reset,
     set_authenticated_user,
     sign_out_user,
     store_auth_session,
+    update_password,
+    verify_password_reset_token,
 )
 from paper_utils import (
     READING_STATUSES,
@@ -64,6 +68,115 @@ METADATA_FETCH_BYTES = 300000
 
 supabase: Client = build_supabase_client(SUPABASE_URL, SUPABASE_KEY)
 logger = logging.getLogger(__name__)
+
+
+def promote_url_fragment_to_query_params():
+    components.html(
+        """
+        <script>
+        const hash = window.parent.location.hash;
+        if (hash && hash.includes("access_token")) {
+            const params = new URLSearchParams(hash.substring(1));
+            const url = new URL(window.parent.location.href);
+            params.forEach((value, key) => url.searchParams.set(key, value));
+            url.hash = "";
+            window.parent.location.replace(url.toString());
+        }
+        </script>
+        """,
+        height=0,
+    )
+
+
+def get_query_param(name):
+    value = st.query_params.get(name)
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def get_password_reset_redirect_url():
+    return st.secrets.get("PASSWORD_RESET_REDIRECT_URL")
+
+
+def show_password_reset_request_form():
+    st.title("パスワード再設定")
+    st.write("登録済みのメールアドレスに、パスワード再設定リンクを送信します。")
+
+    with st.form("password_reset_request_form"):
+        email = st.text_input("メールアドレス")
+        submitted = st.form_submit_button("再設定メールを送信")
+
+    if submitted:
+        normalized_email = normalize_email(email)
+        if not normalized_email:
+            st.error("メールアドレスを入力してください。")
+            return
+
+        try:
+            request_password_reset(
+                supabase,
+                normalized_email,
+                redirect_to=get_password_reset_redirect_url(),
+            )
+            st.success("再設定メールを送信しました。メール内のリンクから新しいパスワードを設定してください。")
+        except Exception as error:
+            logger.exception("Failed to request password reset")
+            st.error(f"再設定メールの送信に失敗しました: {error}")
+
+
+def show_password_update_form():
+    st.title("新しいパスワード")
+
+    token_hash = get_query_param("token_hash")
+    reset_type = get_query_param("type")
+    access_token = get_query_param("access_token")
+    refresh_token = get_query_param("refresh_token")
+
+    if token_hash and reset_type == "recovery" and not st.session_state.get("password_reset_verified"):
+        try:
+            response = verify_password_reset_token(supabase, token_hash)
+            if getattr(response, "session", None):
+                store_auth_session(response.session)
+            st.session_state["password_reset_verified"] = True
+        except Exception as error:
+            logger.exception("Failed to verify password reset token")
+            st.error(f"再設定リンクを確認できませんでした: {error}")
+            return
+
+    if access_token and refresh_token and not st.session_state.get("password_reset_verified"):
+        try:
+            response = supabase.auth.set_session(access_token, refresh_token)
+            if getattr(response, "session", None):
+                store_auth_session(response.session)
+            st.session_state["password_reset_verified"] = True
+        except Exception as error:
+            logger.exception("Failed to restore password reset session")
+            st.error(f"再設定セッションを確認できませんでした: {error}")
+            return
+
+    with st.form("password_update_form"):
+        password = st.text_input("新しいパスワード", type="password")
+        password_confirm = st.text_input("新しいパスワード（確認）", type="password")
+        submitted = st.form_submit_button("パスワードを更新")
+
+    if submitted:
+        if not password or len(password) < 6:
+            st.error("パスワードは6文字以上で入力してください。")
+            return
+        if password != password_confirm:
+            st.error("確認用パスワードが一致しません。")
+            return
+
+        try:
+            update_password(supabase, password)
+            st.session_state.pop("password_reset_verified", None)
+            st.query_params.clear()
+            sign_out_user(supabase)
+            st.success("パスワードを更新しました。新しいパスワードでログインしてください。")
+        except Exception as error:
+            logger.exception("Failed to update password")
+            st.error(f"パスワード更新に失敗しました: {error}")
 
 
 class MetadataParser(HTMLParser):
@@ -263,9 +376,20 @@ def fetch_url_metadata(url):
 
 
 if "user_id" not in st.session_state:
+    promote_url_fragment_to_query_params()
+
+    reset_type = get_query_param("type")
+    if reset_type == "recovery" or get_query_param("access_token"):
+        show_password_update_form()
+        st.stop()
+
     st.title("ログイン")
 
-    auth_mode = st.radio("選択", ["ログイン", "新規登録"])
+    auth_mode = st.radio("選択", ["ログイン", "新規登録", "パスワード再設定"])
+
+    if auth_mode == "パスワード再設定":
+        show_password_reset_request_form()
+        st.stop()
 
     with st.form("auth_form"):
         email = st.text_input("メールアドレス")
@@ -432,7 +556,7 @@ if menu == "追加":
             )
 
             paper_id = insert_result.data[0]["id"]
-            save_tags_for_paper(supabase, paper_id, tags)
+            save_tags_for_paper(supabase, user_id, paper_id, tags)
             st.success("追加しました！")
         except Exception:
             logger.exception("Failed to add paper")
