@@ -210,11 +210,12 @@ def delete_pdf_from_storage(supabase, storage_path):
         supabase.storage.from_(BUCKET_NAME).remove([storage_path])
 
 
-def get_or_create_tag_id(supabase, tag_name):
+def get_or_create_tag_id(supabase, user_id, tag_name):
     tag_result = (
         supabase.table("tags")
         .select("id")
         .eq("name", tag_name)
+        .eq("user_id", user_id)
         .limit(1)
         .execute()
     )
@@ -222,13 +223,13 @@ def get_or_create_tag_id(supabase, tag_name):
     if tag_result.data:
         return tag_result.data[0]["id"]
 
-    new_tag = supabase.table("tags").insert({"name": tag_name}).execute()
+    new_tag = supabase.table("tags").insert({"name": tag_name, "user_id": user_id}).execute()
     return new_tag.data[0]["id"]
 
 
-def save_tags_for_paper(supabase, paper_id, tags_text):
+def save_tags_for_paper(supabase, user_id, paper_id, tags_text):
     for tag_name in normalize_tag_input(tags_text):
-        tag_id = get_or_create_tag_id(supabase, tag_name)
+        tag_id = get_or_create_tag_id(supabase, user_id, tag_name)
         supabase.table("paper_tags").upsert(
             {"paper_id": paper_id, "tag_id": tag_id}
         ).execute()

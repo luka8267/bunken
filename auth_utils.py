@@ -123,6 +123,24 @@ def login_user(supabase, email, password):
     )
 
 
+def request_password_reset(supabase, email, redirect_to=None):
+    options = {"redirect_to": redirect_to} if redirect_to else None
+    return supabase.auth.reset_password_for_email(email, options)
+
+
+def verify_password_reset_token(supabase, token_hash):
+    return supabase.auth.verify_otp(
+        {
+            "token_hash": token_hash,
+            "type": "recovery",
+        }
+    )
+
+
+def update_password(supabase, password):
+    return supabase.auth.update_user({"password": password})
+
+
 def sign_out_user(supabase):
     try:
         supabase.auth.sign_out()
