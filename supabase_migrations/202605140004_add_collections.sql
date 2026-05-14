@@ -13,10 +13,29 @@ create table if not exists public.collections (
 
 create table if not exists public.collection_papers (
     collection_id uuid not null references public.collections(id) on delete cascade,
-    paper_id uuid not null references public.papers(id) on delete cascade,
+    paper_id bigint not null references public.papers(id) on delete cascade,
     created_at timestamptz not null default now(),
     primary key (collection_id, paper_id)
 );
+
+do $$
+begin
+    if exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'collection_papers'
+          and column_name = 'paper_id'
+          and data_type <> 'bigint'
+    ) then
+        if exists (select 1 from public.collection_papers limit 1) then
+            raise exception 'collection_papers.paper_id has the wrong type and contains data; inspect it before rerunning this migration';
+        end if;
+
+        alter table public.collection_papers drop constraint if exists collection_papers_pkey;
+        alter table public.collection_papers drop column paper_id;
+    end if;
+end $$;
 
 alter table public.collections
     add column if not exists id uuid default gen_random_uuid(),
@@ -29,8 +48,25 @@ alter table public.collections
 
 alter table public.collection_papers
     add column if not exists collection_id uuid references public.collections(id) on delete cascade,
-    add column if not exists paper_id uuid references public.papers(id) on delete cascade,
+    add column if not exists paper_id bigint references public.papers(id) on delete cascade,
     add column if not exists created_at timestamptz not null default now();
+
+alter table public.collection_papers
+    alter column collection_id set not null,
+    alter column paper_id set not null;
+
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'collection_papers_pkey'
+          and conrelid = 'public.collection_papers'::regclass
+    ) then
+        alter table public.collection_papers
+        add constraint collection_papers_pkey primary key (collection_id, paper_id);
+    end if;
+end $$;
 
 create index if not exists collections_user_parent_name_idx
 on public.collections (user_id, coalesce(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), name);
