@@ -30,9 +30,11 @@ from paper_utils import (
     SORT_OPTIONS,
     create_collection,
     create_pdf_signed_url,
+    delete_collection,
     delete_paper,
     delete_pdf_from_storage,
     export_to_word_bytes,
+    fetch_collection_counts,
     fetch_document_citations,
     fetch_paper_collection_ids,
     fetch_papers_for_collection,
@@ -48,6 +50,7 @@ from paper_utils import (
     search_user_papers,
     set_paper_collections,
     sort_papers_dataframe,
+    update_collection,
     update_paper_details,
     update_paper_files,
     upload_pdf_to_storage,
@@ -881,12 +884,58 @@ elif menu == "コレクション":
     if not collections:
         st.write("コレクションはまだありません。")
     else:
+        collection_counts = fetch_collection_counts(
+            supabase,
+            [collection["id"] for collection in collections],
+        )
         collection_options = {
-            f"{collection.get('name') or '無題'} [{collection['id'][:8]}]": collection
+            (
+                f"{collection.get('name') or '無題'} "
+                f"({collection_counts.get(collection['id'], 0)}件) "
+                f"[{collection['id'][:8]}]"
+            ): collection
             for collection in collections
         }
         selected_label = st.selectbox("表示するコレクション", list(collection_options.keys()))
         selected_collection = collection_options[selected_label]
+
+        with st.expander("コレクションを編集"):
+            with st.form(f"edit_collection_{selected_collection['id']}"):
+                edited_name = st.text_input(
+                    "コレクション名",
+                    value=selected_collection.get("name") or "",
+                )
+                submitted = st.form_submit_button("名前を保存")
+                if submitted:
+                    try:
+                        update_collection(
+                            supabase,
+                            user_id,
+                            selected_collection["id"],
+                            edited_name,
+                        )
+                        st.success("コレクション名を更新しました")
+                        st.rerun()
+                    except Exception:
+                        logger.exception("Failed to update collection")
+                        st.error("コレクション名を更新できませんでした。")
+
+            st.caption("削除しても論文本体は残ります。コレクションへの所属だけが削除されます。")
+            delete_confirm = st.text_input(
+                "削除する場合はコレクション名を入力",
+                key=f"delete_collection_confirm_{selected_collection['id']}",
+            )
+            if st.button("コレクションを削除", key=f"delete_collection_{selected_collection['id']}"):
+                if delete_confirm != (selected_collection.get("name") or ""):
+                    st.error("確認用のコレクション名が一致しません。")
+                else:
+                    try:
+                        delete_collection(supabase, user_id, selected_collection["id"])
+                        st.success("コレクションを削除しました")
+                        st.rerun()
+                    except Exception:
+                        logger.exception("Failed to delete collection")
+                        st.error("コレクションを削除できませんでした。")
 
         try:
             papers = fetch_papers_for_collection(

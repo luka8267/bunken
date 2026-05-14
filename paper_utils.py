@@ -212,6 +212,30 @@ def create_collection(supabase, user_id, name):
     )
 
 
+def update_collection(supabase, user_id, collection_id, name):
+    normalized_name = (name or "").strip()
+    if not normalized_name:
+        raise ValueError("Collection name is required.")
+
+    return (
+        supabase.table("collections")
+        .update({"name": normalized_name})
+        .eq("id", collection_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
+def delete_collection(supabase, user_id, collection_id):
+    return (
+        supabase.table("collections")
+        .delete()
+        .eq("id", collection_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
 def fetch_collection_paper_ids(supabase, collection_id):
     result = (
         supabase.table("collection_papers")
@@ -220,6 +244,24 @@ def fetch_collection_paper_ids(supabase, collection_id):
         .execute()
     )
     return [row["paper_id"] for row in (result.data or [])]
+
+
+def fetch_collection_counts(supabase, collection_ids):
+    if not collection_ids:
+        return {}
+
+    result = (
+        supabase.table("collection_papers")
+        .select("collection_id")
+        .in_("collection_id", collection_ids)
+        .execute()
+    )
+
+    counts = {collection_id: 0 for collection_id in collection_ids}
+    for row in result.data or []:
+        collection_id = row.get("collection_id")
+        counts[collection_id] = counts.get(collection_id, 0) + 1
+    return counts
 
 
 def fetch_paper_collection_ids(supabase, paper_id):
