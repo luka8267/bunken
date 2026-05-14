@@ -32,6 +32,46 @@ def normalize_doi(doi):
     return (doi or "").strip()
 
 
+def normalize_title_for_match(title):
+    normalized = unicodedata.normalize("NFKC", title or "").casefold()
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def find_duplicate_paper_groups(papers):
+    groups_by_key = {}
+
+    for paper in papers or []:
+        doi = normalize_doi(paper.get("doi")).lower()
+        if doi:
+            groups_by_key.setdefault(("DOI", doi), []).append(paper)
+
+        title = normalize_title_for_match(paper.get("title"))
+        year = paper.get("year")
+        if title and year:
+            groups_by_key.setdefault(("タイトル+年", f"{title}:{year}"), []).append(paper)
+
+    duplicate_groups = []
+    seen_group_ids = set()
+    for (reason, value), group_papers in groups_by_key.items():
+        if len(group_papers) < 2:
+            continue
+
+        group_ids = tuple(sorted(str(paper.get("id")) for paper in group_papers))
+        if group_ids in seen_group_ids:
+            continue
+        seen_group_ids.add(group_ids)
+
+        duplicate_groups.append(
+            {
+                "reason": reason,
+                "value": value,
+                "papers": group_papers,
+            }
+        )
+
+    return duplicate_groups
+
+
 def normalize_tag_input(tags_text):
     seen = set()
     normalized = []
