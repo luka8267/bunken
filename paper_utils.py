@@ -173,6 +173,95 @@ def fetch_document_citations(supabase, document_id):
     )
 
 
+def fetch_user_collections(supabase, user_id):
+    return (
+        supabase.table("collections")
+        .select("id, name, parent_id, sort_order")
+        .eq("user_id", user_id)
+        .order("sort_order")
+        .order("name")
+        .execute()
+    )
+
+
+def create_collection(supabase, user_id, name):
+    normalized_name = (name or "").strip()
+    if not normalized_name:
+        raise ValueError("Collection name is required.")
+
+    max_result = (
+        supabase.table("collections")
+        .select("sort_order")
+        .eq("user_id", user_id)
+        .order("sort_order", desc=True)
+        .limit(1)
+        .execute()
+    )
+    current_max = max_result.data[0]["sort_order"] if max_result.data else 0
+
+    return (
+        supabase.table("collections")
+        .insert(
+            {
+                "user_id": user_id,
+                "name": normalized_name,
+                "sort_order": (current_max or 0) + 1,
+            }
+        )
+        .execute()
+    )
+
+
+def fetch_collection_paper_ids(supabase, collection_id):
+    result = (
+        supabase.table("collection_papers")
+        .select("paper_id")
+        .eq("collection_id", collection_id)
+        .execute()
+    )
+    return [row["paper_id"] for row in (result.data or [])]
+
+
+def fetch_paper_collection_ids(supabase, paper_id):
+    result = (
+        supabase.table("collection_papers")
+        .select("collection_id")
+        .eq("paper_id", paper_id)
+        .execute()
+    )
+    return [row["collection_id"] for row in (result.data or [])]
+
+
+def fetch_papers_for_collection(supabase, user_id, collection_id, columns="id, title, authors, year"):
+    paper_ids = fetch_collection_paper_ids(supabase, collection_id)
+    if not paper_ids:
+        return []
+
+    result = fetch_user_papers_by_ids(supabase, user_id, paper_ids, columns=columns)
+    return result.data or []
+
+
+def set_paper_collections(supabase, paper_id, selected_collection_ids):
+    desired_ids = set(selected_collection_ids or [])
+    current_ids = set(fetch_paper_collection_ids(supabase, paper_id))
+
+    for collection_id in sorted(current_ids - desired_ids):
+        (
+            supabase.table("collection_papers")
+            .delete()
+            .eq("paper_id", paper_id)
+            .eq("collection_id", collection_id)
+            .execute()
+        )
+
+    for collection_id in sorted(desired_ids - current_ids):
+        (
+            supabase.table("collection_papers")
+            .insert({"paper_id": paper_id, "collection_id": collection_id})
+            .execute()
+        )
+
+
 def sort_papers_dataframe(df, sort_option):
     if df.empty:
         return df

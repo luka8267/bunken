@@ -28,13 +28,17 @@ from auth_utils import (
 from paper_utils import (
     READING_STATUSES,
     SORT_OPTIONS,
+    create_collection,
     create_pdf_signed_url,
     delete_paper,
     delete_pdf_from_storage,
     export_to_word_bytes,
     fetch_document_citations,
+    fetch_paper_collection_ids,
+    fetch_papers_for_collection,
     fetch_user_papers,
     fetch_user_papers_by_ids,
+    fetch_user_collections,
     fetch_user_documents,
     get_tag_map_for_papers,
     make_word_citation,
@@ -42,6 +46,7 @@ from paper_utils import (
     normalize_doi,
     save_tags_for_paper,
     search_user_papers,
+    set_paper_collections,
     sort_papers_dataframe,
     update_paper_details,
     update_paper_files,
@@ -460,7 +465,7 @@ if st.session_state.get("email"):
     st.sidebar.caption(st.session_state["email"])
 
 st.title("📚 文献管理アプリ")
-menu = st.sidebar.selectbox("メニュー", ["追加", "検索", "一覧", "タグ検索", "文書引用"])
+menu = st.sidebar.selectbox("メニュー", ["追加", "検索", "一覧", "タグ検索", "コレクション", "文書引用"])
 
 
 if menu == "追加":
@@ -604,6 +609,20 @@ elif menu == "一覧":
         st.write("データがありません")
     else:
         tag_map = get_tag_map_for_papers(supabase, df["id"].tolist())
+        try:
+            collections_result = fetch_user_collections(supabase, user_id)
+            collections = collections_result.data or []
+        except Exception:
+            logger.exception("Failed to fetch collections")
+            collections = []
+        collection_label_by_id = {
+            collection["id"]: f"{collection.get('name') or '無題'} [{collection['id'][:8]}]"
+            for collection in collections
+        }
+        collection_id_by_label = {
+            collection_label_by_id[collection["id"]]: collection["id"]
+            for collection in collections
+        }
 
         for _, row in df.iterrows():
             row_dict = row.to_dict()
@@ -705,6 +724,26 @@ elif menu == "一覧":
                         value=paper_url,
                         key=f"url_{row_dict['id']}",
                     )
+                    selected_collection_labels = []
+                    if collections:
+                        try:
+                            current_collection_ids = fetch_paper_collection_ids(
+                                supabase,
+                                row_dict["id"],
+                            )
+                        except Exception:
+                            logger.exception("Failed to fetch paper collections")
+                            current_collection_ids = []
+                        selected_collection_labels = st.multiselect(
+                            "コレクション",
+                            options=list(collection_id_by_label.keys()),
+                            default=[
+                                collection_label_by_id[collection_id]
+                                for collection_id in current_collection_ids
+                                if collection_id in collection_label_by_id
+                            ],
+                            key=f"collections_{row_dict['id']}",
+                        )
                     new_pdf_file = st.file_uploader(
                         "PDFを追加・差し替え",
                         type=["pdf"],
@@ -747,6 +786,15 @@ elif menu == "一覧":
                                 pdf_path=new_pdf_path,
                                 supporting_path=new_supporting_path,
                             )
+                            if collections:
+                                set_paper_collections(
+                                    supabase,
+                                    row_dict["id"],
+                                    [
+                                        collection_id_by_label[label]
+                                        for label in selected_collection_labels
+                                    ],
+                                )
                             if new_pdf_path and isinstance(pdf_path, str) and pdf_path.strip():
                                 delete_pdf_from_storage(supabase, pdf_path)
                             if (
@@ -804,6 +852,59 @@ elif menu == "タグ検索":
                 else:
                     for paper in papers_result.data:
                         st.write((paper["id"], paper["title"]))
+
+
+elif menu == "コレクション":
+    user_id = get_current_user_id()
+    st.header("コレクション")
+
+    try:
+        collections_result = fetch_user_collections(supabase, user_id)
+        collections = collections_result.data or []
+    except Exception:
+        logger.exception("Failed to fetch collections")
+        st.error("コレクションを取得できませんでした。Supabaseで collection migration を適用してください。")
+        st.stop()
+
+    with st.form("new_collection_form"):
+        collection_name = st.text_input("新しいコレクション名")
+        submitted = st.form_submit_button("作成")
+        if submitted:
+            try:
+                create_collection(supabase, user_id, collection_name)
+                st.success("コレクションを作成しました")
+                st.rerun()
+            except Exception:
+                logger.exception("Failed to create collection")
+                st.error("コレクションを作成できませんでした。同じ名前がないか確認してください。")
+
+    if not collections:
+        st.write("コレクションはまだありません。")
+    else:
+        collection_options = {
+            f"{collection.get('name') or '無題'} [{collection['id'][:8]}]": collection
+            for collection in collections
+        }
+        selected_label = st.selectbox("表示するコレクション", list(collection_options.keys()))
+        selected_collection = collection_options[selected_label]
+
+        try:
+            papers = fetch_papers_for_collection(
+                supabase,
+                user_id,
+                selected_collection["id"],
+            )
+        except Exception:
+            logger.exception("Failed to fetch collection papers")
+            st.error("このコレクションの文献を取得できませんでした。")
+            st.stop()
+
+        st.subheader(f"{selected_label} ({len(papers)}件)")
+        if not papers:
+            st.write("このコレクションにはまだ文献がありません。一覧の編集欄から追加できます。")
+        else:
+            for paper in papers:
+                st.write((paper["id"], paper["title"], paper.get("authors"), paper.get("year")))
 
 
 elif menu == "文書引用":
