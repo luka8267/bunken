@@ -258,6 +258,49 @@ def fetch_document_citations(supabase, document_id):
     )
 
 
+def replace_paper_id_in_document_citations(supabase, user_id, source_paper_id, target_paper_id):
+    source_text = str(source_paper_id)
+    updated_count = 0
+
+    documents_result = fetch_user_documents(supabase, user_id)
+    for document in documents_result.data or []:
+        citations_result = fetch_document_citations(supabase, document["id"])
+        for citation in citations_result.data or []:
+            citation_items = citation.get("citation_items") or []
+            changed = False
+            for item in citation_items:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("paperId")) == source_text:
+                    item["paperId"] = target_paper_id
+                    changed = True
+
+            if changed:
+                (
+                    supabase.table("document_citations")
+                    .update({"citation_items": citation_items})
+                    .eq("id", citation["id"])
+                    .execute()
+                )
+                updated_count += 1
+
+    return updated_count
+
+
+def paper_has_document_citation_refs(supabase, user_id, paper_id):
+    paper_text = str(paper_id)
+    documents_result = fetch_user_documents(supabase, user_id)
+    for document in documents_result.data or []:
+        citations_result = fetch_document_citations(supabase, document["id"])
+        for citation in citations_result.data or []:
+            for item in citation.get("citation_items") or []:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("paperId")) == paper_text:
+                    return True
+    return False
+
+
 def fetch_user_collections(supabase, user_id):
     return (
         supabase.table("collections")
@@ -387,6 +430,113 @@ def set_paper_collections(supabase, paper_id, selected_collection_ids):
             .insert({"paper_id": paper_id, "collection_id": collection_id})
             .execute()
         )
+
+
+def copy_paper_tags(supabase, source_paper_id, target_paper_id):
+    tag_result = (
+        supabase.table("paper_tags")
+        .select("tag_id")
+        .eq("paper_id", source_paper_id)
+        .execute()
+    )
+
+    for row in tag_result.data or []:
+        (
+            supabase.table("paper_tags")
+            .upsert({"paper_id": target_paper_id, "tag_id": row["tag_id"]})
+            .execute()
+        )
+
+
+def copy_paper_collections(supabase, source_paper_id, target_paper_id):
+    collection_result = (
+        supabase.table("collection_papers")
+        .select("collection_id")
+        .eq("paper_id", source_paper_id)
+        .execute()
+    )
+
+    for row in collection_result.data or []:
+        try:
+            (
+                supabase.table("collection_papers")
+                .insert(
+                    {
+                        "paper_id": target_paper_id,
+                        "collection_id": row["collection_id"],
+                    }
+                )
+                .execute()
+            )
+        except APIError as error:
+            if "duplicate" not in str(error).lower():
+                raise
+
+
+def build_paper_merge_update(keeper, duplicate):
+    update_fields = {}
+    conflicts = []
+
+    for field in ("title", "authors", "journal", "year", "doi", "url", "status"):
+        if not keeper.get(field) and duplicate.get(field):
+            update_fields[field] = duplicate[field]
+
+    for field, label in (("pdf_path", "PDF"), ("supporting_path", "補足資料")):
+        keeper_value = keeper.get(field)
+        duplicate_value = duplicate.get(field)
+        if keeper_value and duplicate_value and keeper_value != duplicate_value:
+            conflicts.append(label)
+        elif not keeper_value and duplicate_value:
+            update_fields[field] = duplicate_value
+
+    keeper_notes = (keeper.get("notes") or "").strip()
+    duplicate_notes = (duplicate.get("notes") or "").strip()
+    if duplicate_notes and duplicate_notes not in keeper_notes:
+        if keeper_notes:
+            update_fields["notes"] = f"{keeper_notes}\n\n--- 統合元メモ ---\n{duplicate_notes}"
+        else:
+            update_fields["notes"] = duplicate_notes
+
+    return update_fields, conflicts
+
+
+def merge_duplicate_paper(supabase, user_id, keeper, duplicate):
+    update_fields, conflicts = build_paper_merge_update(keeper, duplicate)
+    if conflicts:
+        raise ValueError(
+            " / ".join(conflicts)
+            + " が両方の文献にあります。先に残す添付を手動で決めてください。"
+        )
+
+    if update_fields:
+        (
+            supabase.table("papers")
+            .update(update_fields)
+            .eq("id", keeper["id"])
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+    copy_paper_tags(supabase, duplicate["id"], keeper["id"])
+    copy_paper_collections(supabase, duplicate["id"], keeper["id"])
+    citation_updates = replace_paper_id_in_document_citations(
+        supabase,
+        user_id,
+        duplicate["id"],
+        keeper["id"],
+    )
+
+    supabase.table("paper_tags").delete().eq("paper_id", duplicate["id"]).execute()
+    supabase.table("collection_papers").delete().eq("paper_id", duplicate["id"]).execute()
+    (
+        supabase.table("papers")
+        .delete()
+        .eq("id", duplicate["id"])
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+    return {"citation_updates": citation_updates, "updated_fields": update_fields}
 
 
 def sort_papers_dataframe(df, sort_option):
@@ -650,6 +800,7 @@ def delete_paper(supabase, user_id, row):
         delete_pdf_from_storage(supabase, supporting_path)
 
     supabase.table("paper_tags").delete().eq("paper_id", row["id"]).execute()
+    supabase.table("collection_papers").delete().eq("paper_id", row["id"]).execute()
     (
         supabase.table("papers")
         .delete()
