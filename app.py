@@ -42,6 +42,7 @@ from paper_utils import (
     fetch_user_papers_by_ids,
     fetch_user_collections,
     fetch_user_documents,
+    filter_papers,
     find_duplicate_paper_groups,
     get_tag_map_for_papers,
     make_word_citation,
@@ -581,16 +582,50 @@ if menu == "追加":
 elif menu == "検索":
     user_id = get_current_user_id()
     keyword = st.text_input("キーワード").strip()
+    col1, col2 = st.columns(2)
+    with col1:
+        year_from = st.number_input("開始年", min_value=0, value=0, step=1)
+    with col2:
+        year_to = st.number_input("終了年", min_value=0, value=0, step=1)
+
+    status_filter = st.selectbox("ステータス", [""] + READING_STATUSES)
+    attachment_filter = st.selectbox(
+        "添付",
+        ["", "PDFあり", "補足資料あり", "添付あり", "添付なし"],
+    )
 
     if st.button("検索"):
-        result = search_user_papers(supabase, user_id, keyword)
-        papers = result.data or []
+        result = fetch_user_papers(
+            supabase,
+            user_id,
+            columns=(
+                "id, title, authors, journal, year, doi, status, notes, "
+                "pdf_path, supporting_path"
+            ),
+        )
+        papers = filter_papers(
+            result.data or [],
+            keyword=keyword,
+            year_from=int(year_from) if year_from else None,
+            year_to=int(year_to) if year_to else None,
+            status=status_filter,
+            attachment_filter=attachment_filter,
+        )
 
         if not papers:
             st.write("見つかりません")
         else:
+            st.write(f"{len(papers)}件見つかりました")
             for paper in papers:
-                st.write((paper["id"], paper["title"], paper["authors"], paper["year"]))
+                st.write(
+                    (
+                        paper["id"],
+                        paper["title"],
+                        paper.get("authors"),
+                        paper.get("year"),
+                        paper.get("status"),
+                    )
+                )
 
 
 elif menu == "一覧":

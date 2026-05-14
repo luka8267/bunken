@@ -165,6 +165,51 @@ def search_user_papers(supabase, user_id, keyword, columns="id, title, authors, 
     return query.execute()
 
 
+def filter_papers(
+    papers,
+    keyword="",
+    year_from=None,
+    year_to=None,
+    status="",
+    attachment_filter="",
+):
+    normalized_keyword = (keyword or "").casefold().strip()
+    filtered = []
+
+    for paper in papers or []:
+        if normalized_keyword:
+            haystack = " ".join(
+                str(paper.get(field) or "")
+                for field in ("title", "authors", "journal", "doi", "notes")
+            ).casefold()
+            if normalized_keyword not in haystack:
+                continue
+
+        year = paper.get("year")
+        if year_from is not None and year and int(year) < year_from:
+            continue
+        if year_to is not None and year and int(year) > year_to:
+            continue
+
+        if status and paper.get("status") != status:
+            continue
+
+        has_pdf = bool(paper.get("pdf_path"))
+        has_supporting = bool(paper.get("supporting_path"))
+        if attachment_filter == "PDFあり" and not has_pdf:
+            continue
+        if attachment_filter == "補足資料あり" and not has_supporting:
+            continue
+        if attachment_filter == "添付あり" and not (has_pdf or has_supporting):
+            continue
+        if attachment_filter == "添付なし" and (has_pdf or has_supporting):
+            continue
+
+        filtered.append(paper)
+
+    return filtered
+
+
 def fetch_user_papers_by_ids(supabase, user_id, paper_ids, columns="id, title"):
     if not paper_ids:
         return None
