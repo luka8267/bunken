@@ -28,6 +28,15 @@ def is_missing_relation_error(error):
     )
 
 
+def is_duplicate_key_error(error):
+    error_text = str(error).lower()
+    return (
+        "duplicate" in error_text
+        or "23505" in error_text
+        or "already exists" in error_text
+    )
+
+
 def normalize_doi(doi):
     return (doi or "").strip()
 
@@ -441,11 +450,15 @@ def copy_paper_tags(supabase, source_paper_id, target_paper_id):
     )
 
     for row in tag_result.data or []:
-        (
-            supabase.table("paper_tags")
-            .upsert({"paper_id": target_paper_id, "tag_id": row["tag_id"]})
-            .execute()
-        )
+        try:
+            (
+                supabase.table("paper_tags")
+                .insert({"paper_id": target_paper_id, "tag_id": row["tag_id"]})
+                .execute()
+            )
+        except APIError as error:
+            if not is_duplicate_key_error(error):
+                raise
 
 
 def copy_paper_collections(supabase, source_paper_id, target_paper_id):
@@ -469,7 +482,7 @@ def copy_paper_collections(supabase, source_paper_id, target_paper_id):
                 .execute()
             )
         except APIError as error:
-            if "duplicate" not in str(error).lower():
+            if not is_duplicate_key_error(error):
                 raise
 
 
@@ -535,6 +548,16 @@ def merge_duplicate_paper(supabase, user_id, keeper, duplicate):
         .eq("user_id", user_id)
         .execute()
     )
+    remaining = (
+        supabase.table("papers")
+        .select("id")
+        .eq("id", duplicate["id"])
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if remaining.data:
+        raise RuntimeError("統合元の文献が削除されませんでした。権限またはRLSを確認してください。")
 
     return {"citation_updates": citation_updates, "updated_fields": update_fields}
 
@@ -790,14 +813,10 @@ def update_paper_files(
     )
 
 
-def delete_paper(supabase, user_id, row):
+def delete_paper(supabase, user_id, row, delete_files=True):
+    storage_errors = []
     pdf_path = row.get("pdf_path")
-    if is_storage_path(pdf_path):
-        delete_pdf_from_storage(supabase, pdf_path)
-
     supporting_path = row.get("supporting_path")
-    if is_storage_path(supporting_path):
-        delete_pdf_from_storage(supabase, supporting_path)
 
     supabase.table("paper_tags").delete().eq("paper_id", row["id"]).execute()
     supabase.table("collection_papers").delete().eq("paper_id", row["id"]).execute()
@@ -808,3 +827,24 @@ def delete_paper(supabase, user_id, row):
         .eq("user_id", user_id)
         .execute()
     )
+    remaining = (
+        supabase.table("papers")
+        .select("id")
+        .eq("id", row["id"])
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if remaining.data:
+        raise RuntimeError("文献が削除されませんでした。権限またはRLSを確認してください。")
+
+    if delete_files:
+        for label, storage_path in (("PDF", pdf_path), ("補足資料", supporting_path)):
+            if not is_storage_path(storage_path):
+                continue
+            try:
+                delete_pdf_from_storage(supabase, storage_path)
+            except Exception as error:
+                storage_errors.append(f"{label}: {error}")
+
+    return {"storage_errors": storage_errors}
