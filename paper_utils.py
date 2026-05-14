@@ -12,11 +12,20 @@ except ImportError:
     APIError = Exception
 
 BUCKET_NAME = "paper-pdfs"
+PAPER_ITEMS_VIEW = "paper_items_view"
 SAFE_STORAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 SAFE_STORAGE_EXT_RE = re.compile(r"[^A-Za-z0-9]")
 MAX_STORAGE_BASENAME_LENGTH = 80
 READING_STATUSES = ["未読", "読書中", "読了", "再読したい", "引用予定"]
 SORT_OPTIONS = ["追加順", "年（新しい順）", "年（古い順）", "タイトル", "ステータス"]
+
+
+def is_missing_relation_error(error):
+    error_text = str(error).lower()
+    return (
+        "paper_items_view" in error_text
+        or ("relation" in error_text and "does not exist" in error_text)
+    )
 
 
 def normalize_doi(doi):
@@ -56,13 +65,21 @@ def make_safe_storage_filename(filename, default_ext=".pdf"):
 def fetch_user_papers(supabase, user_id, columns="*"):
     try:
         return (
-            supabase.table("papers")
+            supabase.table(PAPER_ITEMS_VIEW)
             .select(columns)
             .eq("user_id", user_id)
             .order("display_order")
             .execute()
         )
     except APIError as error:
+        if is_missing_relation_error(error):
+            return (
+                supabase.table("papers")
+                .select(columns)
+                .eq("user_id", user_id)
+                .order("display_order")
+                .execute()
+            )
         error_text = str(error).lower()
         if "uuid" in error_text or "user_id" in error_text:
             raise RuntimeError(
@@ -73,6 +90,25 @@ def fetch_user_papers(supabase, user_id, columns="*"):
 
 def search_user_papers(supabase, user_id, keyword, columns="id, title, authors, year"):
     normalized_keyword = (keyword or "").strip()
+    query = (
+        supabase.table(PAPER_ITEMS_VIEW)
+        .select(columns)
+        .eq("user_id", user_id)
+        .order("display_order")
+    )
+
+    if normalized_keyword:
+        escaped_keyword = normalized_keyword.replace("%", "\\%").replace(",", "\\,")
+        query = query.or_(
+            f"title.ilike.%{escaped_keyword}%,authors.ilike.%{escaped_keyword}%"
+        )
+
+    try:
+        return query.execute()
+    except APIError as error:
+        if not is_missing_relation_error(error):
+            raise
+
     query = (
         supabase.table("papers")
         .select(columns)
@@ -87,6 +123,54 @@ def search_user_papers(supabase, user_id, keyword, columns="id, title, authors, 
         )
 
     return query.execute()
+
+
+def fetch_user_papers_by_ids(supabase, user_id, paper_ids, columns="id, title"):
+    if not paper_ids:
+        return None
+
+    try:
+        return (
+            supabase.table(PAPER_ITEMS_VIEW)
+            .select(columns)
+            .eq("user_id", user_id)
+            .in_("id", paper_ids)
+            .execute()
+        )
+    except APIError as error:
+        if not is_missing_relation_error(error):
+            raise
+
+    return (
+        supabase.table("papers")
+        .select(columns)
+        .eq("user_id", user_id)
+        .in_("id", paper_ids)
+        .execute()
+    )
+
+
+def fetch_user_documents(supabase, user_id):
+    return (
+        supabase.table("documents")
+        .select("id, word_document_id, title, citation_style, locale, updated_at")
+        .eq("user_id", user_id)
+        .order("updated_at", desc=True)
+        .execute()
+    )
+
+
+def fetch_document_citations(supabase, document_id):
+    return (
+        supabase.table("document_citations")
+        .select(
+            "id, citation_key, word_control_id, citation_items, rendered_text, "
+            "sort_order, updated_at"
+        )
+        .eq("document_id", document_id)
+        .order("sort_order")
+        .execute()
+    )
 
 
 def sort_papers_dataframe(df, sort_option):
