@@ -12,7 +12,9 @@ where schemaname = 'public'
       'tags',
       'paper_tags',
       'documents',
-      'document_citations'
+      'document_citations',
+      'collections',
+      'collection_papers'
   )
 order by tablename;
 
@@ -37,7 +39,7 @@ select
     with_check
 from pg_policies
 where schemaname = 'public'
-  and tablename in ('documents', 'document_citations')
+  and tablename in ('documents', 'document_citations', 'collections', 'collection_papers')
 order by tablename, policyname;
 
 select missing_required_policy
@@ -50,7 +52,14 @@ from (
         ('document_citations_select_own_documents'),
         ('document_citations_insert_own_documents'),
         ('document_citations_update_own_documents'),
-        ('document_citations_delete_own_documents')
+        ('document_citations_delete_own_documents'),
+        ('collections_select_own'),
+        ('collections_insert_own'),
+        ('collections_update_own'),
+        ('collections_delete_own'),
+        ('collection_papers_select_own'),
+        ('collection_papers_insert_own'),
+        ('collection_papers_delete_own')
 ) as required(missing_required_policy)
 where not exists (
     select 1
@@ -95,7 +104,14 @@ from (
         ('public.document_citations:select'),
         ('public.document_citations:insert'),
         ('public.document_citations:update'),
-        ('public.document_citations:delete')
+        ('public.document_citations:delete'),
+        ('public.collections:select'),
+        ('public.collections:insert'),
+        ('public.collections:update'),
+        ('public.collections:delete'),
+        ('public.collection_papers:select'),
+        ('public.collection_papers:insert'),
+        ('public.collection_papers:delete')
 ) as required(missing_required_grant)
 where not has_table_privilege(
     'authenticated',
