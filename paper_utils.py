@@ -268,7 +268,8 @@ def fetch_document_citations(supabase, document_id):
 
 
 def replace_paper_id_in_document_citations(supabase, user_id, source_paper_id, target_paper_id):
-    source_text = str(source_paper_id)
+    source_ids = source_paper_id if isinstance(source_paper_id, (list, tuple, set)) else [source_paper_id]
+    source_texts = {str(source_id) for source_id in source_ids if source_id is not None}
     updated_count = 0
 
     documents_result = fetch_user_documents(supabase, user_id)
@@ -280,7 +281,7 @@ def replace_paper_id_in_document_citations(supabase, user_id, source_paper_id, t
             for item in citation_items:
                 if not isinstance(item, dict):
                     continue
-                if str(item.get("paperId")) == source_text:
+                if str(item.get("paperId")) in source_texts:
                     item["paperId"] = target_paper_id
                     changed = True
 
@@ -297,7 +298,8 @@ def replace_paper_id_in_document_citations(supabase, user_id, source_paper_id, t
 
 
 def paper_has_document_citation_refs(supabase, user_id, paper_id):
-    paper_text = str(paper_id)
+    paper_ids = paper_id if isinstance(paper_id, (list, tuple, set)) else [paper_id]
+    paper_texts = {str(value) for value in paper_ids if value is not None}
     documents_result = fetch_user_documents(supabase, user_id)
     for document in documents_result.data or []:
         citations_result = fetch_document_citations(supabase, document["id"])
@@ -305,7 +307,7 @@ def paper_has_document_citation_refs(supabase, user_id, paper_id):
             for item in citation.get("citation_items") or []:
                 if not isinstance(item, dict):
                     continue
-                if str(item.get("paperId")) == paper_text:
+                if str(item.get("paperId")) in paper_texts:
                     return True
     return False
 
@@ -486,6 +488,100 @@ def copy_paper_collections(supabase, source_paper_id, target_paper_id):
                 raise
 
 
+def copy_item_tags(supabase, source_item_id, target_item_id):
+    tag_result = (
+        supabase.table("item_tags")
+        .select("tag_id")
+        .eq("item_id", source_item_id)
+        .execute()
+    )
+
+    for row in tag_result.data or []:
+        try:
+            (
+                supabase.table("item_tags")
+                .insert({"item_id": target_item_id, "tag_id": row["tag_id"]})
+                .execute()
+            )
+        except APIError as error:
+            if not is_duplicate_key_error(error):
+                raise
+
+
+def copy_item_collections(supabase, source_item_id, target_item_id):
+    collection_result = (
+        supabase.table("collection_items")
+        .select("collection_id")
+        .eq("item_id", source_item_id)
+        .execute()
+    )
+
+    for row in collection_result.data or []:
+        try:
+            (
+                supabase.table("collection_items")
+                .insert(
+                    {
+                        "item_id": target_item_id,
+                        "collection_id": row["collection_id"],
+                    }
+                )
+                .execute()
+            )
+        except APIError as error:
+            if not is_duplicate_key_error(error):
+                raise
+
+
+def fetch_item_storage_paths(supabase, item_id):
+    result = (
+        supabase.table("attachments")
+        .select("storage_path")
+        .eq("item_id", item_id)
+        .execute()
+    )
+    return [
+        row["storage_path"]
+        for row in (result.data or [])
+        if is_storage_path(row.get("storage_path"))
+    ]
+
+
+def transfer_item_attachments(supabase, source_item_id, target_item_id, keeper, duplicate):
+    conflicts = []
+    transferred_fields = {}
+
+    for _, field, label in (
+        ("pdf", "pdf_path", "PDF"),
+        ("supporting", "supporting_path", "補足資料"),
+    ):
+        keeper_value = keeper.get(field)
+        duplicate_value = duplicate.get(field)
+        if keeper_value and duplicate_value and keeper_value != duplicate_value:
+            conflicts.append(label)
+
+    if conflicts:
+        return transferred_fields, conflicts
+
+    for kind, field, label in (
+        ("pdf", "pdf_path", "PDF"),
+        ("supporting", "supporting_path", "補足資料"),
+    ):
+        keeper_value = keeper.get(field)
+        duplicate_value = duplicate.get(field)
+        if not keeper_value and duplicate_value:
+            (
+                supabase.table("attachments")
+                .update({"item_id": target_item_id})
+                .eq("item_id", source_item_id)
+                .eq("kind", kind)
+                .execute()
+            )
+            transferred_fields[field] = duplicate_value
+
+    return transferred_fields, conflicts
+
+
 def build_paper_merge_update(keeper, duplicate):
     update_fields = {}
     conflicts = []
@@ -513,7 +609,63 @@ def build_paper_merge_update(keeper, duplicate):
     return update_fields, conflicts
 
 
+def build_item_merge_update(keeper, duplicate):
+    update_fields = {}
+
+    field_map = {
+        "title": "title",
+        "journal": "publication_title",
+        "year": "year",
+        "doi": "doi",
+        "url": "url",
+        "notes": "abstract_note",
+    }
+
+    for view_field, item_field in field_map.items():
+        if view_field == "notes":
+            continue
+        if not keeper.get(view_field) and duplicate.get(view_field):
+            update_fields[item_field] = duplicate[view_field]
+
+    keeper_notes = (keeper.get("notes") or "").strip()
+    duplicate_notes = (duplicate.get("notes") or "").strip()
+    if duplicate_notes and duplicate_notes not in keeper_notes:
+        if keeper_notes:
+            update_fields["abstract_note"] = (
+                f"{keeper_notes}\n\n--- 統合元メモ ---\n{duplicate_notes}"
+            )
+        else:
+            update_fields["abstract_note"] = duplicate_notes
+
+    return update_fields
+
+
+def item_update_to_view_fields(update_fields):
+    field_map = {
+        "publication_title": "journal",
+        "abstract_note": "notes",
+    }
+    return {
+        field_map.get(field, field): value
+        for field, value in update_fields.items()
+    }
+
+
+def is_item_backed_paper(row):
+    return bool(row.get("item_id"))
+
+
+def get_paper_reference_ids(row):
+    values = [row.get("id"), row.get("item_id")]
+    return [value for value in values if value is not None]
+
+
 def merge_duplicate_paper(supabase, user_id, keeper, duplicate):
+    if is_item_backed_paper(keeper) or is_item_backed_paper(duplicate):
+        if not is_item_backed_paper(keeper) or not is_item_backed_paper(duplicate):
+            raise ValueError("items由来とpapers由来の文献は自動統合できません。")
+        return merge_duplicate_item(supabase, user_id, keeper, duplicate)
+
     update_fields, conflicts = build_paper_merge_update(keeper, duplicate)
     if conflicts:
         raise ValueError(
@@ -560,6 +712,64 @@ def merge_duplicate_paper(supabase, user_id, keeper, duplicate):
         raise RuntimeError("統合元の文献が削除されませんでした。権限またはRLSを確認してください。")
 
     return {"citation_updates": citation_updates, "updated_fields": update_fields}
+
+
+def merge_duplicate_item(supabase, user_id, keeper, duplicate):
+    update_fields = build_item_merge_update(keeper, duplicate)
+    transferred_fields, attachment_conflicts = transfer_item_attachments(
+        supabase,
+        duplicate["item_id"],
+        keeper["item_id"],
+        keeper,
+        duplicate,
+    )
+    if attachment_conflicts:
+        raise ValueError(
+            " / ".join(attachment_conflicts)
+            + " が両方の文献にあります。先に残す添付を手動で決めてください。"
+        )
+
+    if update_fields:
+        (
+            supabase.table("items")
+            .update(update_fields)
+            .eq("id", keeper["item_id"])
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+    copy_item_tags(supabase, duplicate["item_id"], keeper["item_id"])
+    copy_item_collections(supabase, duplicate["item_id"], keeper["item_id"])
+    citation_updates = replace_paper_id_in_document_citations(
+        supabase,
+        user_id,
+        get_paper_reference_ids(duplicate),
+        keeper["id"],
+    )
+
+    supabase.table("item_tags").delete().eq("item_id", duplicate["item_id"]).execute()
+    supabase.table("collection_items").delete().eq("item_id", duplicate["item_id"]).execute()
+    (
+        supabase.table("items")
+        .delete()
+        .eq("id", duplicate["item_id"])
+        .eq("user_id", user_id)
+        .execute()
+    )
+    remaining = (
+        supabase.table("items")
+        .select("id")
+        .eq("id", duplicate["item_id"])
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if remaining.data:
+        raise RuntimeError("統合元の文献が削除されませんでした。権限またはRLSを確認してください。")
+
+    updated_fields = item_update_to_view_fields(update_fields)
+    updated_fields.update(transferred_fields)
+    return {"citation_updates": citation_updates, "updated_fields": updated_fields}
 
 
 def sort_papers_dataframe(df, sort_option):
@@ -814,6 +1024,9 @@ def update_paper_files(
 
 
 def delete_paper(supabase, user_id, row, delete_files=True):
+    if is_item_backed_paper(row):
+        return delete_item_backed_paper(supabase, user_id, row, delete_files=delete_files)
+
     storage_errors = []
     pdf_path = row.get("pdf_path")
     supporting_path = row.get("supporting_path")
@@ -846,5 +1059,39 @@ def delete_paper(supabase, user_id, row, delete_files=True):
                 delete_pdf_from_storage(supabase, storage_path)
             except Exception as error:
                 storage_errors.append(f"{label}: {error}")
+
+    return {"storage_errors": storage_errors}
+
+
+def delete_item_backed_paper(supabase, user_id, row, delete_files=True):
+    storage_errors = []
+    storage_paths = fetch_item_storage_paths(supabase, row["item_id"])
+
+    supabase.table("item_tags").delete().eq("item_id", row["item_id"]).execute()
+    supabase.table("collection_items").delete().eq("item_id", row["item_id"]).execute()
+    (
+        supabase.table("items")
+        .delete()
+        .eq("id", row["item_id"])
+        .eq("user_id", user_id)
+        .execute()
+    )
+    remaining = (
+        supabase.table("items")
+        .select("id")
+        .eq("id", row["item_id"])
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if remaining.data:
+        raise RuntimeError("文献が削除されませんでした。権限またはRLSを確認してください。")
+
+    if delete_files:
+        for storage_path in storage_paths:
+            try:
+                delete_pdf_from_storage(supabase, storage_path)
+            except Exception as error:
+                storage_errors.append(f"{storage_path}: {error}")
 
     return {"storage_errors": storage_errors}

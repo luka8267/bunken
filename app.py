@@ -1013,7 +1013,7 @@ elif menu == "重複確認":
         supabase,
         user_id,
         columns=(
-            "id, title, authors, journal, year, doi, url, status, notes, "
+            "id, item_id, title, authors, journal, year, doi, url, status, notes, "
             "pdf_path, supporting_path"
         ),
     )
@@ -1125,7 +1125,11 @@ elif menu == "重複確認":
                                 if paper_has_document_citation_refs(
                                     supabase,
                                     user_id,
-                                    paper["id"],
+                                    [
+                                        value
+                                        for value in (paper.get("id"), paper.get("item_id"))
+                                        if value is not None
+                                    ],
                                 ):
                                     blocked.append(label)
 
