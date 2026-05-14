@@ -472,6 +472,9 @@ if st.session_state.get("email"):
     st.sidebar.caption(st.session_state["email"])
 
 st.title("📚 文献管理アプリ")
+post_action_warning = st.session_state.pop("post_action_warning", None)
+if post_action_warning:
+    st.warning(post_action_warning)
 menu = st.sidebar.selectbox(
     "メニュー",
     ["追加", "検索", "一覧", "タグ検索", "コレクション", "重複確認", "文書引用"],
@@ -719,8 +722,13 @@ elif menu == "一覧":
 
                 with col4:
                     if st.button("🗑 削除", key=f"del_{row_dict['id']}"):
-                        delete_paper(supabase, user_id, row_dict)
+                        delete_result = delete_paper(supabase, user_id, row_dict)
                         st.success("削除しました")
+                        if delete_result.get("storage_errors"):
+                            st.session_state["post_action_warning"] = (
+                                "DBからは削除しましたが、Storageファイル削除に失敗しました: "
+                                + " / ".join(delete_result["storage_errors"])
+                            )
                         st.rerun()
 
                 with col5:
@@ -1088,9 +1096,9 @@ elif menu == "重複確認":
                             st.rerun()
                         except ValueError as error:
                             st.error(str(error))
-                        except Exception:
+                        except Exception as error:
                             logger.exception("Failed to merge duplicate papers")
-                            st.error("統合に失敗しました。ログと対象文献を確認してください。")
+                            st.error(f"統合に失敗しました: {error}")
 
                 st.subheader("削除")
                 delete_labels = st.multiselect(
@@ -1128,13 +1136,26 @@ elif menu == "重複確認":
                                     + ", ".join(blocked)
                                 )
                             else:
+                                storage_errors = []
                                 for label in delete_labels:
-                                    delete_paper(supabase, user_id, paper_by_label[label])
+                                    delete_result = delete_paper(
+                                        supabase,
+                                        user_id,
+                                        paper_by_label[label],
+                                    )
+                                    storage_errors.extend(
+                                        delete_result.get("storage_errors", [])
+                                    )
                                 st.success("選択した文献を削除しました。")
+                                if storage_errors:
+                                    st.session_state["post_action_warning"] = (
+                                        "DBからは削除しましたが、Storageファイル削除に失敗しました: "
+                                        + " / ".join(storage_errors)
+                                    )
                                 st.rerun()
-                        except Exception:
+                        except Exception as error:
                             logger.exception("Failed to delete duplicate papers")
-                            st.error("削除に失敗しました。ログと対象文献を確認してください。")
+                            st.error(f"削除に失敗しました: {error}")
 
 
 elif menu == "文書引用":
