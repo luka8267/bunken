@@ -32,7 +32,10 @@ from paper_utils import (
     delete_paper,
     delete_pdf_from_storage,
     export_to_word_bytes,
+    fetch_document_citations,
     fetch_user_papers,
+    fetch_user_papers_by_ids,
+    fetch_user_documents,
     get_tag_map_for_papers,
     make_word_citation,
     move_paper,
@@ -457,7 +460,7 @@ if st.session_state.get("email"):
     st.sidebar.caption(st.session_state["email"])
 
 st.title("📚 文献管理アプリ")
-menu = st.sidebar.selectbox("メニュー", ["追加", "検索", "一覧", "タグ検索"])
+menu = st.sidebar.selectbox("メニュー", ["追加", "検索", "一覧", "タグ検索", "文書引用"])
 
 
 if menu == "追加":
@@ -625,6 +628,14 @@ elif menu == "一覧":
                 if paper_url:
                     st.link_button("Webページ", paper_url)
 
+                attachments = []
+                if signed_url:
+                    attachments.append("PDF")
+                if supporting_url:
+                    attachments.append("資料")
+                if attachments:
+                    st.caption("添付: " + " / ".join(attachments))
+
                 tags_list = tag_map.get(row_dict["id"], [])
                 if tags_list:
                     st.write("タグ:", ", ".join(tags_list))
@@ -762,6 +773,7 @@ elif menu == "タグ検索":
             supabase.table("tags")
             .select("id")
             .eq("name", tag)
+            .eq("user_id", user_id)
             .limit(1)
             .execute()
         )
@@ -780,12 +792,11 @@ elif menu == "タグ検索":
             if not paper_ids:
                 st.write("見つかりません")
             else:
-                papers_result = (
-                    supabase.table("papers")
-                    .select("id, title")
-                    .eq("user_id", user_id)
-                    .in_("id", paper_ids)
-                    .execute()
+                papers_result = fetch_user_papers_by_ids(
+                    supabase,
+                    user_id,
+                    paper_ids,
+                    columns="id, title",
                 )
 
                 if not papers_result.data:
@@ -793,3 +804,72 @@ elif menu == "タグ検索":
                 else:
                     for paper in papers_result.data:
                         st.write((paper["id"], paper["title"]))
+
+
+elif menu == "文書引用":
+    user_id = get_current_user_id()
+    st.header("Word文書の引用")
+
+    try:
+        documents_result = fetch_user_documents(supabase, user_id)
+        documents = documents_result.data or []
+    except Exception:
+        logger.exception("Failed to fetch documents")
+        st.error(
+            "文書引用を取得できませんでした。"
+            " Supabaseで documents / document_citations / paper_items_view の migration を確認してください。"
+        )
+        st.stop()
+
+    if not documents:
+        st.write("同期済みのWord文書はまだありません。Wordアドインで引用を挿入・更新すると表示されます。")
+    else:
+        document_options = {
+            f"{doc.get('title') or '無題'} / {doc.get('citation_style') or '-'} / {doc.get('updated_at') or ''}": doc
+            for doc in documents
+        }
+        selected_label = st.selectbox("文書", list(document_options.keys()))
+        selected_document = document_options[selected_label]
+
+        st.write(f"文書ID: {selected_document.get('word_document_id')}")
+        st.write(f"引用スタイル: {selected_document.get('citation_style')}")
+        if selected_document.get("locale"):
+            st.write(f"ロケール: {selected_document.get('locale')}")
+
+        try:
+            citations_result = fetch_document_citations(supabase, selected_document["id"])
+            citations = citations_result.data or []
+        except Exception:
+            logger.exception("Failed to fetch document citations")
+            st.error("この文書の引用一覧を取得できませんでした。")
+            st.stop()
+
+        if not citations:
+            st.write("この文書には同期済みの引用がありません。")
+        else:
+            st.subheader(f"引用一覧 ({len(citations)}件)")
+            for citation in citations:
+                with st.container():
+                    rendered_text = citation.get("rendered_text") or "引用"
+                    st.markdown(f"**{citation.get('sort_order')}. {rendered_text}**")
+                    if citation.get("word_control_id"):
+                        st.caption(f"Word control: {citation['word_control_id']}")
+
+                    items = citation.get("citation_items") or []
+                    if items:
+                        for item in items:
+                            paper_id = item.get("paperId")
+                            locator = item.get("locator")
+                            reference_number = item.get("referenceNumber")
+                            details = [f"paper_id={paper_id}"]
+                            if reference_number:
+                                details.append(f"ref={reference_number}")
+                            if locator:
+                                details.append(f"locator={locator}")
+                            st.write("- " + ", ".join(details))
+                    else:
+                        st.caption("文献アイテムなし")
+
+                    if citation.get("updated_at"):
+                        st.caption(f"更新: {citation['updated_at']}")
+                    st.divider()
