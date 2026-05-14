@@ -42,6 +42,7 @@ from paper_utils import (
     fetch_user_papers_by_ids,
     fetch_user_collections,
     fetch_user_documents,
+    find_duplicate_paper_groups,
     get_tag_map_for_papers,
     make_word_citation,
     move_paper,
@@ -468,7 +469,10 @@ if st.session_state.get("email"):
     st.sidebar.caption(st.session_state["email"])
 
 st.title("📚 文献管理アプリ")
-menu = st.sidebar.selectbox("メニュー", ["追加", "検索", "一覧", "タグ検索", "コレクション", "文書引用"])
+menu = st.sidebar.selectbox(
+    "メニュー",
+    ["追加", "検索", "一覧", "タグ検索", "コレクション", "重複確認", "文書引用"],
+)
 
 
 if menu == "追加":
@@ -954,6 +958,41 @@ elif menu == "コレクション":
         else:
             for paper in papers:
                 st.write((paper["id"], paper["title"], paper.get("authors"), paper.get("year")))
+
+
+elif menu == "重複確認":
+    user_id = get_current_user_id()
+    st.header("重複確認")
+
+    result = fetch_user_papers(
+        supabase,
+        user_id,
+        columns="id, title, authors, journal, year, doi",
+    )
+    papers = result.data or []
+    duplicate_groups = find_duplicate_paper_groups(papers)
+
+    if not duplicate_groups:
+        st.write("重複候補は見つかりませんでした。")
+    else:
+        st.write(f"{len(duplicate_groups)}件の重複候補があります。")
+        st.caption("この画面は確認専用です。ここから文献は削除されません。")
+
+        for index, group in enumerate(duplicate_groups, start=1):
+            reason = group["reason"]
+            value = group["value"]
+            group_papers = group["papers"]
+            with st.expander(f"{index}. {reason}: {value} ({len(group_papers)}件)"):
+                for paper in group_papers:
+                    st.markdown(f"**{paper.get('title') or '無題'}**")
+                    st.write(f"ID: {paper.get('id')}")
+                    if paper.get("authors"):
+                        st.write(f"著者: {paper.get('authors')}")
+                    if paper.get("journal") or paper.get("year"):
+                        st.write(f"雑誌・年: {paper.get('journal') or ''} ({paper.get('year') or '-'})")
+                    if paper.get("doi"):
+                        st.write(f"DOI: {paper.get('doi')}")
+                    st.divider()
 
 
 elif menu == "文書引用":
