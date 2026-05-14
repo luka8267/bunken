@@ -46,8 +46,10 @@ from paper_utils import (
     find_duplicate_paper_groups,
     get_tag_map_for_papers,
     make_word_citation,
+    merge_duplicate_paper,
     move_paper,
     normalize_doi,
+    paper_has_document_citation_refs,
     save_tags_for_paper,
     search_user_papers,
     set_paper_collections,
@@ -1002,7 +1004,10 @@ elif menu == "重複確認":
     result = fetch_user_papers(
         supabase,
         user_id,
-        columns="id, title, authors, journal, year, doi",
+        columns=(
+            "id, title, authors, journal, year, doi, url, status, notes, "
+            "pdf_path, supporting_path"
+        ),
     )
     papers = result.data or []
     duplicate_groups = find_duplicate_paper_groups(papers)
@@ -1018,6 +1023,10 @@ elif menu == "重複確認":
             value = group["value"]
             group_papers = group["papers"]
             with st.expander(f"{index}. {reason}: {value} ({len(group_papers)}件)"):
+                paper_by_label = {
+                    f"{paper.get('title') or '無題'} [{paper.get('id')}]": paper
+                    for paper in group_papers
+                }
                 for paper in group_papers:
                     st.markdown(f"**{paper.get('title') or '無題'}**")
                     st.write(f"ID: {paper.get('id')}")
@@ -1027,7 +1036,105 @@ elif menu == "重複確認":
                         st.write(f"雑誌・年: {paper.get('journal') or ''} ({paper.get('year') or '-'})")
                     if paper.get("doi"):
                         st.write(f"DOI: {paper.get('doi')}")
+                    attachments = []
+                    if paper.get("pdf_path"):
+                        attachments.append("PDF")
+                    if paper.get("supporting_path"):
+                        attachments.append("補足資料")
+                    if attachments:
+                        st.caption("添付: " + " / ".join(attachments))
                     st.divider()
+
+                st.subheader("統合")
+                keeper_label = st.radio(
+                    "残す文献",
+                    list(paper_by_label.keys()),
+                    key=f"merge_keeper_{index}",
+                )
+                merge_labels = st.multiselect(
+                    "統合して削除する文献",
+                    [
+                        label
+                        for label in paper_by_label
+                        if label != keeper_label
+                    ],
+                    key=f"merge_targets_{index}",
+                )
+                merge_confirm = st.text_input(
+                    "統合する場合は「統合」と入力",
+                    key=f"merge_confirm_{index}",
+                )
+                if st.button("選択した文献を統合", key=f"merge_button_{index}"):
+                    if merge_confirm != "統合":
+                        st.error("確認文字列が一致しません。")
+                    elif not merge_labels:
+                        st.error("統合する文献を選んでください。")
+                    else:
+                        try:
+                            keeper = paper_by_label[keeper_label]
+                            citation_updates = 0
+                            for label in merge_labels:
+                                merge_result = merge_duplicate_paper(
+                                    supabase,
+                                    user_id,
+                                    keeper,
+                                    paper_by_label[label],
+                                )
+                                citation_updates += merge_result["citation_updates"]
+                                keeper.update(merge_result["updated_fields"])
+                            st.success(
+                                f"統合しました。Word引用参照の更新: {citation_updates}件"
+                            )
+                            st.rerun()
+                        except ValueError as error:
+                            st.error(str(error))
+                        except Exception:
+                            logger.exception("Failed to merge duplicate papers")
+                            st.error("統合に失敗しました。ログと対象文献を確認してください。")
+
+                st.subheader("削除")
+                delete_labels = st.multiselect(
+                    "削除する文献",
+                    list(paper_by_label.keys()),
+                    key=f"delete_targets_{index}",
+                )
+                delete_confirm = st.text_input(
+                    "削除する場合は「削除」と入力",
+                    key=f"delete_confirm_{index}",
+                )
+                if st.button("選択した文献を削除", key=f"delete_button_{index}"):
+                    if delete_confirm != "削除":
+                        st.error("確認文字列が一致しません。")
+                    elif not delete_labels:
+                        st.error("削除する文献を選んでください。")
+                    elif len(delete_labels) >= len(group_papers):
+                        st.error("候補グループ内の全件削除はできません。少なくとも1件は残してください。")
+                    else:
+                        try:
+                            blocked = []
+                            for label in delete_labels:
+                                paper = paper_by_label[label]
+                                if paper_has_document_citation_refs(
+                                    supabase,
+                                    user_id,
+                                    paper["id"],
+                                ):
+                                    blocked.append(label)
+
+                            if blocked:
+                                st.error(
+                                    "Word引用で使われている文献は削除できません。"
+                                    " 統合を使って参照先を移してください: "
+                                    + ", ".join(blocked)
+                                )
+                            else:
+                                for label in delete_labels:
+                                    delete_paper(supabase, user_id, paper_by_label[label])
+                                st.success("選択した文献を削除しました。")
+                                st.rerun()
+                        except Exception:
+                            logger.exception("Failed to delete duplicate papers")
+                            st.error("削除に失敗しました。ログと対象文献を確認してください。")
 
 
 elif menu == "文書引用":
