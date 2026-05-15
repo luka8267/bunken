@@ -96,6 +96,15 @@ def is_storage_path(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+def normalize_optional_id(value):
+    if value is None:
+        return None
+    if value != value:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def make_safe_storage_filename(filename, default_ext=".pdf"):
     name, ext = os.path.splitext(filename or "")
     ext = ext.lower()
@@ -604,65 +613,115 @@ def fetch_collection_paper_ids(supabase, collection_id):
         .eq("collection_id", collection_id)
         .execute()
     )
-    return [row["paper_id"] for row in (result.data or [])]
+    return [str(row["paper_id"]) for row in (result.data or [])]
+
+
+def fetch_collection_item_ids(supabase, collection_id):
+    result = (
+        supabase.table("collection_items")
+        .select("item_id")
+        .eq("collection_id", collection_id)
+        .execute()
+    )
+    return [str(row["item_id"]) for row in (result.data or [])]
 
 
 def fetch_collection_counts(supabase, collection_ids):
     if not collection_ids:
         return {}
 
-    result = (
+    paper_result = (
         supabase.table("collection_papers")
+        .select("collection_id")
+        .in_("collection_id", collection_ids)
+        .execute()
+    )
+    item_result = (
+        supabase.table("collection_items")
         .select("collection_id")
         .in_("collection_id", collection_ids)
         .execute()
     )
 
     counts = {collection_id: 0 for collection_id in collection_ids}
-    for row in result.data or []:
+    for row in (paper_result.data or []) + (item_result.data or []):
         collection_id = row.get("collection_id")
         counts[collection_id] = counts.get(collection_id, 0) + 1
     return counts
 
 
-def fetch_paper_collection_ids(supabase, paper_id):
-    result = (
+def fetch_paper_collection_ids(supabase, paper_id, item_id=None):
+    collection_ids = set()
+    paper_result = (
         supabase.table("collection_papers")
         .select("collection_id")
         .eq("paper_id", paper_id)
         .execute()
     )
-    return [row["collection_id"] for row in (result.data or [])]
+    collection_ids.update(row["collection_id"] for row in (paper_result.data or []))
+
+    if item_id:
+        item_result = (
+            supabase.table("collection_items")
+            .select("collection_id")
+            .eq("item_id", item_id)
+            .execute()
+        )
+        collection_ids.update(row["collection_id"] for row in (item_result.data or []))
+
+    return sorted(collection_ids)
 
 
 def fetch_papers_for_collection(supabase, user_id, collection_id, columns="id, title, authors, year"):
     paper_ids = fetch_collection_paper_ids(supabase, collection_id)
-    if not paper_ids:
+    item_ids = fetch_collection_item_ids(supabase, collection_id)
+    reference_ids = set(paper_ids + item_ids)
+    if not reference_ids:
         return []
 
-    result = fetch_user_papers_by_ids(supabase, user_id, paper_ids, columns=columns)
-    return result.data or []
+    result = fetch_user_papers(supabase, user_id, columns=columns)
+    return [
+        paper
+        for paper in (result.data or [])
+        if str(paper.get("id")) in reference_ids
+        or str(paper.get("item_id")) in reference_ids
+    ]
 
 
-def set_paper_collections(supabase, paper_id, selected_collection_ids):
+def set_paper_collections(supabase, paper_id, selected_collection_ids, item_id=None):
     desired_ids = set(selected_collection_ids or [])
-    current_ids = set(fetch_paper_collection_ids(supabase, paper_id))
+    current_ids = set(fetch_paper_collection_ids(supabase, paper_id, item_id))
+    table_name = "collection_items" if item_id else "collection_papers"
+    id_column = "item_id" if item_id else "paper_id"
+    record_id = item_id or paper_id
 
     for collection_id in sorted(current_ids - desired_ids):
+        if item_id:
+            (
+                supabase.table("collection_papers")
+                .delete()
+                .eq("paper_id", paper_id)
+                .eq("collection_id", collection_id)
+                .execute()
+            )
         (
-            supabase.table("collection_papers")
+            supabase.table(table_name)
             .delete()
-            .eq("paper_id", paper_id)
+            .eq(id_column, record_id)
             .eq("collection_id", collection_id)
             .execute()
         )
 
     for collection_id in sorted(desired_ids - current_ids):
-        (
-            supabase.table("collection_papers")
-            .insert({"paper_id": paper_id, "collection_id": collection_id})
-            .execute()
-        )
+        try:
+            (
+                supabase.table(table_name)
+                .insert({id_column: record_id, "collection_id": collection_id})
+                .execute()
+            )
+        except APIError as error:
+            if not is_duplicate_key_error(error):
+                raise
 
 
 def copy_paper_tags(supabase, source_paper_id, target_paper_id):
@@ -1150,35 +1209,134 @@ def save_tags_for_item(supabase, user_id, item_id, tags_text):
         ).execute()
 
 
-def get_tag_map_for_papers(supabase, paper_ids):
-    if not paper_ids:
+def get_tag_map_for_papers(supabase, papers_or_ids):
+    if not papers_or_ids:
         return {}
 
-    paper_tag_result = (
-        supabase.table("paper_tags")
-        .select("paper_id, tag_id")
-        .in_("paper_id", paper_ids)
-        .execute()
-    )
+    if isinstance(papers_or_ids[0], dict):
+        papers = papers_or_ids
+        paper_ids = [
+            normalized_id
+            for normalized_id in (normalize_optional_id(row.get("id")) for row in papers)
+            if normalized_id
+        ]
+        item_ids = [
+            normalized_id
+            for normalized_id in (
+                normalize_optional_id(row.get("item_id")) for row in papers
+            )
+            if normalized_id
+        ]
+    else:
+        paper_ids = [
+            normalized_id
+            for normalized_id in (normalize_optional_id(paper_id) for paper_id in papers_or_ids)
+            if normalized_id
+        ]
+        item_ids = []
 
-    paper_tags = paper_tag_result.data or []
-    if not paper_tags:
+    paper_tag_result = None
+    if paper_ids:
+        paper_tag_result = (
+            supabase.table("paper_tags")
+            .select("paper_id, tag_id")
+            .in_("paper_id", paper_ids)
+            .execute()
+        )
+    item_tag_result = None
+    if item_ids:
+        item_tag_result = (
+            supabase.table("item_tags")
+            .select("item_id, tag_id")
+            .in_("item_id", item_ids)
+            .execute()
+        )
+
+    paper_tags = paper_tag_result.data if paper_tag_result else []
+    item_tags = item_tag_result.data if item_tag_result else []
+    if not paper_tags and not item_tags:
         return {}
 
-    tag_ids = sorted({row["tag_id"] for row in paper_tags})
+    tag_ids = sorted({row["tag_id"] for row in paper_tags + item_tags})
     tag_result = supabase.table("tags").select("id, name").in_("id", tag_ids).execute()
-    tag_name_map = {row["id"]: row["name"] for row in (tag_result.data or [])}
+    tag_name_map = {str(row["id"]): row["name"] for row in (tag_result.data or [])}
 
     tag_map = {paper_id: [] for paper_id in paper_ids}
     for row in paper_tags:
-        tag_name = tag_name_map.get(row["tag_id"])
+        tag_name = tag_name_map.get(str(row["tag_id"]))
         if tag_name:
-            tag_map.setdefault(row["paper_id"], []).append(tag_name)
+            tag_map.setdefault(str(row["paper_id"]), []).append(tag_name)
+    for row in item_tags:
+        tag_name = tag_name_map.get(str(row["tag_id"]))
+        if tag_name:
+            tag_map.setdefault(str(row["item_id"]), []).append(tag_name)
 
     return tag_map
 
 
-def move_paper(supabase, user_id, paper_id, display_order, direction):
+def update_item_display_order(supabase, user_id, item_id, display_order):
+    item_result = (
+        supabase.table("items")
+        .select("extra")
+        .eq("id", item_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    extra = (item_result.data or [{}])[0].get("extra") or {}
+    extra["legacy_display_order"] = str(display_order)
+    (
+        supabase.table("items")
+        .update({"extra": extra})
+        .eq("id", item_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
+def move_paper(supabase, user_id, paper_id, display_order, direction, item_id=None):
+    if item_id:
+        result = fetch_user_papers(
+            supabase,
+            user_id,
+            columns="id, item_id, display_order",
+        )
+        papers = [
+            row
+            for row in (result.data or [])
+            if row.get("display_order") is not None
+        ]
+        papers.sort(key=lambda row: int(row["display_order"]))
+        index = next(
+            (
+                position
+                for position, row in enumerate(papers)
+                if str(row.get("item_id")) == str(item_id)
+            ),
+            None,
+        )
+        if index is None:
+            return
+        neighbor_index = index - 1 if direction == "up" else index + 1
+        if neighbor_index < 0 or neighbor_index >= len(papers):
+            return
+
+        current = papers[index]
+        neighbor = papers[neighbor_index]
+        update_item_display_order(
+            supabase,
+            user_id,
+            current["item_id"],
+            neighbor["display_order"],
+        )
+        update_item_display_order(
+            supabase,
+            user_id,
+            neighbor["item_id"],
+            current["display_order"],
+        )
+        return
+
     operator = "lt" if direction == "up" else "gt"
     descending = direction == "up"
 
@@ -1216,7 +1374,30 @@ def move_paper(supabase, user_id, paper_id, display_order, direction):
     )
 
 
-def update_paper_details(supabase, user_id, paper_id, status, notes, url=None):
+def update_paper_details(supabase, user_id, paper_id, status, notes, url=None, item_id=None):
+    if item_id:
+        item_result = (
+            supabase.table("items")
+            .select("extra")
+            .eq("id", item_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        extra = (item_result.data or [{}])[0].get("extra") or {}
+        extra["legacy_status"] = status
+        fields = {"abstract_note": notes, "extra": extra}
+        if url is not None:
+            fields["url"] = url
+        (
+            supabase.table("items")
+            .update(fields)
+            .eq("id", item_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return
+
     fields = {"status": status, "notes": notes}
     if url is not None:
         fields["url"] = url

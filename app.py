@@ -244,6 +244,84 @@ def normalize_url(url):
     return normalized_url
 
 
+def get_paper_tag_list(tag_map, paper):
+    tags = tag_map.get(str(paper.get("id")), [])
+    item_id = clean_optional_id(paper.get("item_id"))
+    if item_id:
+        tags = tags + tag_map.get(str(item_id), [])
+    return list(dict.fromkeys(tags))
+
+
+def clean_optional_id(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except TypeError:
+        pass
+    text = str(value).strip()
+    return text or None
+
+
+def render_paper_summary(paper, tag_map=None, show_id=False):
+    paper_url = normalize_url(paper.get("url"))
+    signed_url = create_pdf_signed_url(supabase, paper.get("pdf_path"), 3600)
+    supporting_url = create_pdf_signed_url(supabase, paper.get("supporting_path"), 3600)
+
+    ref_no = paper.get("ref_no")
+    heading_prefix = f"[{ref_no}] " if ref_no else ""
+    st.markdown(f"### {heading_prefix}{paper.get('title') or '無題'}")
+    if show_id:
+        st.caption(f"ID: {paper.get('id')}")
+    if paper.get("authors"):
+        st.write(f"著者: {paper.get('authors')}")
+    if paper.get("journal") or paper.get("year"):
+        st.write(f"雑誌: {paper.get('journal') or ''} ({paper.get('year') or '-'})")
+    if paper.get("doi"):
+        st.write(f"DOI: {paper.get('doi')}")
+    if paper.get("status"):
+        st.write(f"ステータス: {paper.get('status')}")
+    if paper.get("notes"):
+        st.write("メモ:")
+        st.write(paper["notes"])
+
+    attachments = []
+    if signed_url:
+        attachments.append("PDF")
+    if supporting_url:
+        attachments.append("資料")
+    if attachments:
+        st.caption("添付: " + " / ".join(attachments))
+
+    if tag_map:
+        tags_list = get_paper_tag_list(tag_map, paper)
+        if tags_list:
+            st.write("タグ:", ", ".join(tags_list))
+
+    actions = st.columns(3)
+    with actions[0]:
+        if signed_url:
+            st.link_button("📄 PDF", signed_url)
+    with actions[1]:
+        if supporting_url:
+            st.link_button("資料", supporting_url)
+    with actions[2]:
+        if paper_url:
+            st.link_button("Webページ", paper_url)
+
+
+def format_duplicate_option_label(paper):
+    memo = (paper.get("notes") or "").strip().replace("\n", " ")
+    memo_part = f" / メモ: {memo[:60]}" if memo else " / メモなし"
+    return (
+        f"{paper.get('title') or '無題'}"
+        f" ({paper.get('year') or '-'})"
+        f"{memo_part}"
+        f" [{paper.get('id')}]"
+    )
+
+
 def is_public_http_url(url):
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -592,8 +670,8 @@ elif menu == "検索":
             supabase,
             user_id,
             columns=(
-                "id, title, authors, journal, year, doi, status, notes, "
-                "pdf_path, supporting_path"
+                "id, item_id, title, authors, journal, year, doi, url, status, notes, "
+                "pdf_path, supporting_path, display_order"
             ),
         )
         papers = filter_papers(
@@ -609,16 +687,11 @@ elif menu == "検索":
             st.write("見つかりません")
         else:
             st.write(f"{len(papers)}件見つかりました")
+            tag_map = get_tag_map_for_papers(supabase, papers)
             for paper in papers:
-                st.write(
-                    (
-                        paper["id"],
-                        paper["title"],
-                        paper.get("authors"),
-                        paper.get("year"),
-                        paper.get("status"),
-                    )
-                )
+                with st.container():
+                    render_paper_summary(paper, tag_map=tag_map)
+                    st.divider()
 
 
 elif menu == "一覧":
@@ -643,7 +716,8 @@ elif menu == "一覧":
     if df.empty:
         st.write("データがありません")
     else:
-        tag_map = get_tag_map_for_papers(supabase, df["id"].tolist())
+        records = df.to_dict(orient="records")
+        tag_map = get_tag_map_for_papers(supabase, records)
         try:
             collections_result = fetch_user_collections(supabase, user_id)
             collections = collections_result.data or []
@@ -661,6 +735,7 @@ elif menu == "一覧":
 
         for _, row in df.iterrows():
             row_dict = row.to_dict()
+            item_id = clean_optional_id(row_dict.get("item_id"))
             pdf_path = row_dict.get("pdf_path")
             signed_url = create_pdf_signed_url(supabase, pdf_path, 3600)
             supporting_path = row_dict.get("supporting_path")
@@ -690,7 +765,7 @@ elif menu == "一覧":
                 if attachments:
                     st.caption("添付: " + " / ".join(attachments))
 
-                tags_list = tag_map.get(row_dict["id"], [])
+                tags_list = get_paper_tag_list(tag_map, row_dict)
                 if tags_list:
                     st.write("タグ:", ", ".join(tags_list))
 
@@ -725,7 +800,14 @@ elif menu == "一覧":
 
                 with col6:
                     if st.button("⬆", key=f"up_{row_dict['id']}"):
-                        move_paper(supabase, user_id, row_dict["id"], row_dict["display_order"], "up")
+                        move_paper(
+                            supabase,
+                            user_id,
+                            row_dict["id"],
+                            row_dict["display_order"],
+                            "up",
+                            item_id=item_id,
+                        )
                         st.rerun()
 
                 with col7:
@@ -736,6 +818,7 @@ elif menu == "一覧":
                             row_dict["id"],
                             row_dict["display_order"],
                             "down",
+                            item_id=item_id,
                         )
                         st.rerun()
 
@@ -770,6 +853,7 @@ elif menu == "一覧":
                             current_collection_ids = fetch_paper_collection_ids(
                                 supabase,
                                 row_dict["id"],
+                                item_id,
                             )
                         except Exception:
                             logger.exception("Failed to fetch paper collections")
@@ -818,6 +902,7 @@ elif menu == "一覧":
                                 edit_status,
                                 edit_notes,
                                 normalize_url(edit_url) or None,
+                                item_id=item_id,
                             )
                             update_paper_files(
                                 supabase,
@@ -825,7 +910,7 @@ elif menu == "一覧":
                                 row_dict["id"],
                                 pdf_path=new_pdf_path,
                                 supporting_path=new_supporting_path,
-                                item_id=row_dict.get("item_id"),
+                                item_id=item_id,
                             )
                             if collections:
                                 set_paper_collections(
@@ -835,6 +920,7 @@ elif menu == "一覧":
                                         collection_id_by_label[label]
                                         for label in selected_collection_labels
                                     ],
+                                    item_id=item_id,
                                 )
                             if new_pdf_path and isinstance(pdf_path, str) and pdf_path.strip():
                                 delete_pdf_from_storage(supabase, pdf_path)
@@ -870,29 +956,52 @@ elif menu == "タグ検索":
         if not tag_result.data:
             st.write("見つかりません")
         else:
+            tag_id = tag_result.data[0]["id"]
             paper_tag_result = (
                 supabase.table("paper_tags")
                 .select("paper_id")
-                .eq("tag_id", tag_result.data[0]["id"])
+                .eq("tag_id", tag_id)
                 .execute()
             )
-            paper_ids = [row["paper_id"] for row in (paper_tag_result.data or [])]
+            item_tag_result = (
+                supabase.table("item_tags")
+                .select("item_id")
+                .eq("tag_id", str(tag_id))
+                .execute()
+            )
+            reference_ids = {
+                str(row["paper_id"]) for row in (paper_tag_result.data or [])
+            }
+            reference_ids.update(
+                str(row["item_id"]) for row in (item_tag_result.data or [])
+            )
 
-            if not paper_ids:
+            if not reference_ids:
                 st.write("見つかりません")
             else:
-                papers_result = fetch_user_papers_by_ids(
+                papers_result = fetch_user_papers(
                     supabase,
                     user_id,
-                    paper_ids,
-                    columns="id, title",
+                    columns=(
+                        "id, item_id, title, authors, journal, year, doi, url, "
+                        "status, notes, pdf_path, supporting_path, display_order"
+                    ),
                 )
+                papers = [
+                    paper
+                    for paper in (papers_result.data or [])
+                    if str(paper.get("id")) in reference_ids
+                    or str(paper.get("item_id")) in reference_ids
+                ]
 
-                if not papers_result.data:
+                if not papers:
                     st.write("見つかりません")
                 else:
-                    for paper in papers_result.data:
-                        st.write((paper["id"], paper["title"]))
+                    tag_map = get_tag_map_for_papers(supabase, papers)
+                    for paper in papers:
+                        with st.container():
+                            render_paper_summary(paper, tag_map=tag_map)
+                            st.divider()
 
 
 elif menu == "コレクション":
@@ -1021,7 +1130,7 @@ elif menu == "重複確認":
             group_papers = group["papers"]
             with st.expander(f"{index}. {reason}: {value} ({len(group_papers)}件)"):
                 paper_by_label = {
-                    f"{paper.get('title') or '無題'} [{paper.get('id')}]": paper
+                    format_duplicate_option_label(paper): paper
                     for paper in group_papers
                 }
                 for paper in group_papers:
@@ -1033,6 +1142,11 @@ elif menu == "重複確認":
                         st.write(f"雑誌・年: {paper.get('journal') or ''} ({paper.get('year') or '-'})")
                     if paper.get("doi"):
                         st.write(f"DOI: {paper.get('doi')}")
+                    if paper.get("status"):
+                        st.write(f"ステータス: {paper.get('status')}")
+                    if paper.get("notes"):
+                        st.write("メモ:")
+                        st.write(paper["notes"])
                     attachments = []
                     if paper.get("pdf_path"):
                         attachments.append("PDF")
