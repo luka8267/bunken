@@ -244,6 +244,35 @@ def fetch_user_papers_by_ids(supabase, user_id, paper_ids, columns="id, title"):
     )
 
 
+def find_existing_user_paper_by_doi(supabase, user_id, doi, columns="id, title"):
+    normalized_doi = normalize_doi(doi)
+    if not normalized_doi:
+        return None
+
+    try:
+        result = (
+            supabase.table(PAPER_ITEMS_VIEW)
+            .select(columns)
+            .eq("user_id", user_id)
+            .eq("doi", normalized_doi)
+            .limit(1)
+            .execute()
+        )
+    except APIError as error:
+        if not is_missing_relation_error(error):
+            raise
+        result = (
+            supabase.table("papers")
+            .select(columns)
+            .eq("user_id", user_id)
+            .eq("doi", normalized_doi)
+            .limit(1)
+            .execute()
+        )
+
+    return (result.data or [None])[0]
+
+
 def fetch_user_documents(supabase, user_id):
     return (
         supabase.table("documents")
@@ -998,13 +1027,71 @@ def update_paper_details(supabase, user_id, paper_id, status, notes, url=None):
     )
 
 
+def replace_item_attachment(supabase, user_id, item_id, kind, storage_path):
+    if not item_id or storage_path is None:
+        return
+
+    if not is_storage_path(storage_path):
+        (
+            supabase.table("attachments")
+            .delete()
+            .eq("item_id", item_id)
+            .eq("kind", kind)
+            .execute()
+        )
+        return
+
+    existing = (
+        supabase.table("attachments")
+        .select("id")
+        .eq("item_id", item_id)
+        .eq("kind", kind)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        (
+            supabase.table("attachments")
+            .update({"storage_path": storage_path})
+            .eq("id", existing.data[0]["id"])
+            .execute()
+        )
+    else:
+        (
+            supabase.table("attachments")
+            .insert(
+                {
+                    "item_id": item_id,
+                    "user_id": user_id,
+                    "kind": kind,
+                    "storage_path": storage_path,
+                }
+            )
+            .execute()
+        )
+
+
 def update_paper_files(
     supabase,
     user_id,
     paper_id,
     pdf_path=None,
     supporting_path=None,
+    item_id=None,
 ):
+    if item_id:
+        if pdf_path is not None:
+            replace_item_attachment(supabase, user_id, item_id, "pdf", pdf_path)
+        if supporting_path is not None:
+            replace_item_attachment(
+                supabase,
+                user_id,
+                item_id,
+                "supporting",
+                supporting_path,
+            )
+        return
+
     fields = {}
     if pdf_path is not None:
         fields["pdf_path"] = pdf_path
