@@ -29,6 +29,7 @@ from paper_utils import (
     READING_STATUSES,
     SORT_OPTIONS,
     create_collection,
+    create_user_paper,
     create_pdf_signed_url,
     delete_collection,
     delete_paper,
@@ -45,6 +46,7 @@ from paper_utils import (
     fetch_user_documents,
     filter_papers,
     find_duplicate_paper_groups,
+    get_next_display_order,
     get_tag_map_for_papers,
     make_word_citation,
     merge_duplicate_paper,
@@ -52,6 +54,7 @@ from paper_utils import (
     normalize_doi,
     paper_has_document_citation_refs,
     save_tags_for_paper,
+    save_tags_for_item,
     search_user_papers,
     set_paper_collections,
     sort_papers_dataframe,
@@ -543,40 +546,26 @@ if menu == "追加":
                 else None
             )
 
-            max_result = (
-                supabase.table("papers")
-                .select("display_order")
-                .eq("user_id", user_id)
-                .order("display_order", desc=True)
-                .limit(1)
-                .execute()
+            next_order = get_next_display_order(supabase, user_id)
+            created_paper = create_user_paper(
+                supabase,
+                user_id,
+                title,
+                authors,
+                journal,
+                year,
+                normalized_doi,
+                normalized_url,
+                pdf_path,
+                supporting_path,
+                status,
+                notes,
+                next_order,
             )
-            current_max = max_result.data[0]["display_order"] if max_result.data else 0
-            next_order = (current_max or 0) + 1
-
-            insert_result = (
-                supabase.table("papers")
-                .insert(
-                    {
-                        "title": title,
-                        "authors": authors,
-                        "journal": journal,
-                        "year": int(year),
-                        "doi": normalized_doi or None,
-                        "url": normalized_url or None,
-                        "pdf_path": pdf_path,
-                        "supporting_path": supporting_path,
-                        "user_id": user_id,
-                        "display_order": next_order,
-                        "status": status,
-                        "notes": notes,
-                    }
-                )
-                .execute()
-            )
-
-            paper_id = insert_result.data[0]["id"]
-            save_tags_for_paper(supabase, user_id, paper_id, tags)
+            if created_paper.get("item_id"):
+                save_tags_for_item(supabase, user_id, created_paper["item_id"], tags)
+            else:
+                save_tags_for_paper(supabase, user_id, created_paper["id"], tags)
             st.success("追加しました！")
         except Exception:
             logger.exception("Failed to add paper")

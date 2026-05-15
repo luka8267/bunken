@@ -273,6 +273,199 @@ def find_existing_user_paper_by_doi(supabase, user_id, doi, columns="id, title")
     return (result.data or [None])[0]
 
 
+def get_next_display_order(supabase, user_id):
+    try:
+        result = fetch_user_papers(
+            supabase,
+            user_id,
+            columns="display_order",
+        )
+        values = [
+            int(row["display_order"])
+            for row in (result.data or [])
+            if row.get("display_order") is not None
+        ]
+        return (max(values) if values else 0) + 1
+    except Exception:
+        result = (
+            supabase.table("papers")
+            .select("display_order")
+            .eq("user_id", user_id)
+            .order("display_order", desc=True)
+            .limit(1)
+            .execute()
+        )
+        current_max = result.data[0]["display_order"] if result.data else 0
+        return (current_max or 0) + 1
+
+
+def create_attachment_row(supabase, user_id, item_id, kind, storage_path):
+    if not is_storage_path(storage_path):
+        return
+
+    (
+        supabase.table("attachments")
+        .insert(
+            {
+                "item_id": item_id,
+                "user_id": user_id,
+                "kind": kind,
+                "storage_path": storage_path,
+            }
+        )
+        .execute()
+    )
+
+
+def create_item_creator_rows(supabase, item_id, authors):
+    names = [name.strip() for name in (authors or "").split(",") if name.strip()]
+    for position, name in enumerate(names, start=1):
+        (
+            supabase.table("creators")
+            .insert(
+                {
+                    "item_id": item_id,
+                    "creator_type": "author",
+                    "literal_name": name,
+                    "position": position,
+                }
+            )
+            .execute()
+        )
+
+
+def create_item_backed_paper(
+    supabase,
+    user_id,
+    title,
+    authors,
+    journal,
+    year,
+    doi,
+    url,
+    pdf_path,
+    supporting_path,
+    status,
+    notes,
+    display_order,
+):
+    item_result = (
+        supabase.table("items")
+        .insert(
+            {
+                "user_id": user_id,
+                "item_type": "journalArticle",
+                "title": title,
+                "publication_title": journal,
+                "year": int(year),
+                "doi": doi or None,
+                "url": url or None,
+                "abstract_note": notes,
+                "extra": {
+                    "legacy_status": status,
+                    "legacy_display_order": str(display_order),
+                },
+            }
+        )
+        .execute()
+    )
+    item_id = item_result.data[0]["id"]
+    create_item_creator_rows(supabase, item_id, authors)
+    create_attachment_row(supabase, user_id, item_id, "pdf", pdf_path)
+    create_attachment_row(supabase, user_id, item_id, "supporting", supporting_path)
+    return {"id": str(item_id), "item_id": item_id}
+
+
+def create_legacy_paper(
+    supabase,
+    user_id,
+    title,
+    authors,
+    journal,
+    year,
+    doi,
+    url,
+    pdf_path,
+    supporting_path,
+    status,
+    notes,
+    display_order,
+):
+    insert_result = (
+        supabase.table("papers")
+        .insert(
+            {
+                "title": title,
+                "authors": authors,
+                "journal": journal,
+                "year": int(year),
+                "doi": doi or None,
+                "url": url or None,
+                "pdf_path": pdf_path,
+                "supporting_path": supporting_path,
+                "user_id": user_id,
+                "display_order": display_order,
+                "status": status,
+                "notes": notes,
+            }
+        )
+        .execute()
+    )
+    return {"id": insert_result.data[0]["id"], "item_id": None}
+
+
+def create_user_paper(
+    supabase,
+    user_id,
+    title,
+    authors,
+    journal,
+    year,
+    doi,
+    url,
+    pdf_path,
+    supporting_path,
+    status,
+    notes,
+    display_order,
+):
+    try:
+        return create_item_backed_paper(
+            supabase,
+            user_id,
+            title,
+            authors,
+            journal,
+            year,
+            doi,
+            url,
+            pdf_path,
+            supporting_path,
+            status,
+            notes,
+            display_order,
+        )
+    except APIError as error:
+        if not is_missing_relation_error(error) and "items" not in str(error).lower():
+            raise
+
+    return create_legacy_paper(
+        supabase,
+        user_id,
+        title,
+        authors,
+        journal,
+        year,
+        doi,
+        url,
+        pdf_path,
+        supporting_path,
+        status,
+        notes,
+        display_order,
+    )
+
+
 def fetch_user_documents(supabase, user_id):
     return (
         supabase.table("documents")
@@ -944,6 +1137,16 @@ def save_tags_for_paper(supabase, user_id, paper_id, tags_text):
         tag_id = get_or_create_tag_id(supabase, user_id, tag_name)
         supabase.table("paper_tags").upsert(
             {"paper_id": paper_id, "tag_id": tag_id}
+        ).execute()
+
+
+def save_tags_for_item(supabase, user_id, item_id, tags_text):
+    if not item_id:
+        return
+    for tag_name in normalize_tag_input(tags_text):
+        tag_id = get_or_create_tag_id(supabase, user_id, tag_name)
+        supabase.table("item_tags").upsert(
+            {"item_id": item_id, "tag_id": str(tag_id)}
         ).execute()
 
 
