@@ -38,6 +38,7 @@ from paper_utils import (
     fetch_document_citations,
     fetch_paper_collection_ids,
     fetch_papers_for_collection,
+    find_existing_user_paper_by_doi,
     fetch_user_papers,
     fetch_user_papers_by_ids,
     fetch_user_collections,
@@ -523,16 +524,14 @@ if menu == "追加":
         normalized_url = normalize_url(url)
 
         if normalized_doi:
-            existing = (
-                supabase.table("papers")
-                .select("id, title")
-                .eq("user_id", user_id)
-                .eq("doi", normalized_doi)
-                .limit(1)
-                .execute()
+            existing = find_existing_user_paper_by_doi(
+                supabase,
+                user_id,
+                normalized_doi,
+                columns="id, title",
             )
 
-            if existing.data:
+            if existing:
                 st.warning("このDOIの文献はすでに登録されています。")
                 st.stop()
 
@@ -837,6 +836,7 @@ elif menu == "一覧":
                                 row_dict["id"],
                                 pdf_path=new_pdf_path,
                                 supporting_path=new_supporting_path,
+                                item_id=row_dict.get("item_id"),
                             )
                             if collections:
                                 set_paper_collections(
