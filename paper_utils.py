@@ -105,6 +105,16 @@ def normalize_optional_id(value):
     return text or None
 
 
+def normalize_uuid_text(value):
+    text = normalize_optional_id(value)
+    if not text:
+        return None
+    try:
+        return str(uuid.UUID(text))
+    except (TypeError, ValueError):
+        return None
+
+
 def make_safe_storage_filename(filename, default_ext=".pdf"):
     name, ext = os.path.splitext(filename or "")
     ext = ext.lower()
@@ -630,24 +640,71 @@ def fetch_collection_counts(supabase, collection_ids):
     if not collection_ids:
         return {}
 
+    references_by_collection = {collection_id: set() for collection_id in collection_ids}
+
     paper_result = (
         supabase.table("collection_papers")
-        .select("collection_id")
+        .select("collection_id, paper_id")
         .in_("collection_id", collection_ids)
         .execute()
     )
-    item_result = (
-        supabase.table("collection_items")
-        .select("collection_id")
-        .in_("collection_id", collection_ids)
-        .execute()
-    )
-
-    counts = {collection_id: 0 for collection_id in collection_ids}
-    for row in (paper_result.data or []) + (item_result.data or []):
+    for row in paper_result.data or []:
         collection_id = row.get("collection_id")
-        counts[collection_id] = counts.get(collection_id, 0) + 1
-    return counts
+        paper_id = normalize_optional_id(row.get("paper_id"))
+        if collection_id in references_by_collection and paper_id:
+            references_by_collection[collection_id].add(("paper", paper_id))
+
+    try:
+        item_result = (
+            supabase.table("collection_items")
+            .select("collection_id, item_id")
+            .in_("collection_id", collection_ids)
+            .execute()
+        )
+    except APIError as error:
+        if is_missing_relation_error(error):
+            return {
+                collection_id: len(references)
+                for collection_id, references in references_by_collection.items()
+            }
+        raise
+
+    item_rows = item_result.data or []
+    item_ids = [
+        item_id
+        for item_id in (normalize_optional_id(row.get("item_id")) for row in item_rows)
+        if item_id
+    ]
+    legacy_key_by_item_id = {}
+    if item_ids:
+        item_metadata = (
+            supabase.table("items")
+            .select("id, legacy_source, legacy_paper_id")
+            .in_("id", item_ids)
+            .execute()
+        )
+        for row in item_metadata.data or []:
+            item_id = normalize_optional_id(row.get("id"))
+            legacy_paper_id = normalize_optional_id(row.get("legacy_paper_id"))
+            if (
+                item_id
+                and row.get("legacy_source") == "papers"
+                and legacy_paper_id
+            ):
+                legacy_key_by_item_id[item_id] = ("paper", legacy_paper_id)
+
+    for row in item_rows:
+        collection_id = row.get("collection_id")
+        item_id = normalize_optional_id(row.get("item_id"))
+        if collection_id in references_by_collection and item_id:
+            references_by_collection[collection_id].add(
+                legacy_key_by_item_id.get(item_id, ("item", item_id))
+            )
+
+    return {
+        collection_id: len(references)
+        for collection_id, references in references_by_collection.items()
+    }
 
 
 def fetch_paper_collection_ids(supabase, paper_id, item_id=None):
@@ -1263,28 +1320,49 @@ def get_tag_map_for_papers(supabase, papers_or_ids):
 
     paper_tag_result = None
     if paper_ids:
-        paper_tag_result = (
-            supabase.table("paper_tags")
-            .select("paper_id, tag_id")
-            .in_("paper_id", paper_ids)
-            .execute()
-        )
+        try:
+            paper_tag_result = (
+                supabase.table("paper_tags")
+                .select("paper_id, tag_id")
+                .in_("paper_id", paper_ids)
+                .execute()
+            )
+        except APIError:
+            return {}
     item_tag_result = None
     if item_ids:
-        item_tag_result = (
-            supabase.table("item_tags")
-            .select("item_id, tag_id")
-            .in_("item_id", item_ids)
-            .execute()
-        )
+        try:
+            item_tag_result = (
+                supabase.table("item_tags")
+                .select("item_id, tag_id")
+                .in_("item_id", item_ids)
+                .execute()
+            )
+        except APIError:
+            return {}
 
     paper_tags = paper_tag_result.data if paper_tag_result else []
     item_tags = item_tag_result.data if item_tag_result else []
     if not paper_tags and not item_tags:
         return {}
 
-    tag_ids = sorted({row["tag_id"] for row in paper_tags + item_tags})
-    tag_result = supabase.table("tags").select("id, name").in_("id", tag_ids).execute()
+    tag_ids = sorted(
+        {
+            tag_id
+            for tag_id in (
+                normalize_uuid_text(row.get("tag_id"))
+                for row in paper_tags + item_tags
+            )
+            if tag_id
+        }
+    )
+    if not tag_ids:
+        return {}
+
+    try:
+        tag_result = supabase.table("tags").select("id, name").in_("id", tag_ids).execute()
+    except APIError:
+        return {}
     tag_name_map = {str(row["id"]): row["name"] for row in (tag_result.data or [])}
 
     tag_map = {paper_id: [] for paper_id in paper_ids}
