@@ -814,11 +814,25 @@ def copy_item_collections(supabase, source_item_id, target_item_id):
                 raise
 
 
-def fetch_item_storage_paths(supabase, item_id):
+def ensure_user_owns_item(supabase, user_id, item_id):
+    result = (
+        supabase.table("items")
+        .select("id")
+        .eq("id", item_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise RuntimeError("Item ownership could not be confirmed.")
+
+
+def fetch_item_storage_paths(supabase, user_id, item_id):
     result = (
         supabase.table("attachments")
         .select("storage_path")
         .eq("item_id", item_id)
+        .eq("user_id", user_id)
         .execute()
     )
     return [
@@ -828,7 +842,14 @@ def fetch_item_storage_paths(supabase, item_id):
     ]
 
 
-def transfer_item_attachments(supabase, source_item_id, target_item_id, keeper, duplicate):
+def transfer_item_attachments(
+    supabase,
+    user_id,
+    source_item_id,
+    target_item_id,
+    keeper,
+    duplicate,
+):
     conflicts = []
     transferred_fields = {}
 
@@ -855,6 +876,7 @@ def transfer_item_attachments(supabase, source_item_id, target_item_id, keeper, 
                 supabase.table("attachments")
                 .update({"item_id": target_item_id})
                 .eq("item_id", source_item_id)
+                .eq("user_id", user_id)
                 .eq("kind", kind)
                 .execute()
             )
@@ -996,9 +1018,13 @@ def merge_duplicate_paper(supabase, user_id, keeper, duplicate):
 
 
 def merge_duplicate_item(supabase, user_id, keeper, duplicate):
+    ensure_user_owns_item(supabase, user_id, keeper["item_id"])
+    ensure_user_owns_item(supabase, user_id, duplicate["item_id"])
+
     update_fields = build_item_merge_update(keeper, duplicate)
     transferred_fields, attachment_conflicts = transfer_item_attachments(
         supabase,
+        user_id,
         duplicate["item_id"],
         keeper["item_id"],
         keeper,
@@ -1415,11 +1441,14 @@ def replace_item_attachment(supabase, user_id, item_id, kind, storage_path):
     if not item_id or storage_path is None:
         return
 
+    ensure_user_owns_item(supabase, user_id, item_id)
+
     if not is_storage_path(storage_path):
         (
             supabase.table("attachments")
             .delete()
             .eq("item_id", item_id)
+            .eq("user_id", user_id)
             .eq("kind", kind)
             .execute()
         )
@@ -1429,6 +1458,7 @@ def replace_item_attachment(supabase, user_id, item_id, kind, storage_path):
         supabase.table("attachments")
         .select("id")
         .eq("item_id", item_id)
+        .eq("user_id", user_id)
         .eq("kind", kind)
         .limit(1)
         .execute()
@@ -1438,6 +1468,7 @@ def replace_item_attachment(supabase, user_id, item_id, kind, storage_path):
             supabase.table("attachments")
             .update({"storage_path": storage_path})
             .eq("id", existing.data[0]["id"])
+            .eq("user_id", user_id)
             .execute()
         )
     else:
@@ -1536,7 +1567,8 @@ def delete_paper(supabase, user_id, row, delete_files=True):
 
 def delete_item_backed_paper(supabase, user_id, row, delete_files=True):
     storage_errors = []
-    storage_paths = fetch_item_storage_paths(supabase, row["item_id"])
+    ensure_user_owns_item(supabase, user_id, row["item_id"])
+    storage_paths = fetch_item_storage_paths(supabase, user_id, row["item_id"])
 
     supabase.table("item_tags").delete().eq("item_id", row["item_id"]).execute()
     supabase.table("collection_items").delete().eq("item_id", row["item_id"]).execute()
