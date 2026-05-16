@@ -25,6 +25,8 @@ def is_missing_relation_error(error):
     return (
         "paper_items_view" in error_text
         or ("relation" in error_text and "does not exist" in error_text)
+        or ("could not find the table" in error_text and "schema cache" in error_text)
+        or ("could not find" in error_text and "relation" in error_text)
     )
 
 
@@ -627,12 +629,17 @@ def fetch_collection_paper_ids(supabase, collection_id):
 
 
 def fetch_collection_item_ids(supabase, collection_id):
-    result = (
-        supabase.table("collection_items")
-        .select("item_id")
-        .eq("collection_id", collection_id)
-        .execute()
-    )
+    try:
+        result = (
+            supabase.table("collection_items")
+            .select("item_id")
+            .eq("collection_id", collection_id)
+            .execute()
+        )
+    except APIError as error:
+        if is_missing_relation_error(error):
+            return []
+        raise
     return [str(row["item_id"]) for row in (result.data or [])]
 
 
@@ -718,13 +725,17 @@ def fetch_paper_collection_ids(supabase, paper_id, item_id=None):
     collection_ids.update(row["collection_id"] for row in (paper_result.data or []))
 
     if item_id:
-        item_result = (
-            supabase.table("collection_items")
-            .select("collection_id")
-            .eq("item_id", item_id)
-            .execute()
-        )
-        collection_ids.update(row["collection_id"] for row in (item_result.data or []))
+        try:
+            item_result = (
+                supabase.table("collection_items")
+                .select("collection_id")
+                .eq("item_id", item_id)
+                .execute()
+            )
+            collection_ids.update(row["collection_id"] for row in (item_result.data or []))
+        except APIError as error:
+            if not is_missing_relation_error(error):
+                raise
 
     return sorted(collection_ids)
 
@@ -751,6 +762,7 @@ def set_paper_collections(supabase, paper_id, selected_collection_ids, item_id=N
     table_name = "collection_items" if item_id else "collection_papers"
     id_column = "item_id" if item_id else "paper_id"
     record_id = item_id or paper_id
+    item_collection_table_missing = False
 
     for collection_id in sorted(current_ids - desired_ids):
         if item_id:
@@ -761,13 +773,18 @@ def set_paper_collections(supabase, paper_id, selected_collection_ids, item_id=N
                 .eq("collection_id", collection_id)
                 .execute()
             )
-        (
-            supabase.table(table_name)
-            .delete()
-            .eq(id_column, record_id)
-            .eq("collection_id", collection_id)
-            .execute()
-        )
+        try:
+            (
+                supabase.table(table_name)
+                .delete()
+                .eq(id_column, record_id)
+                .eq("collection_id", collection_id)
+                .execute()
+            )
+        except APIError as error:
+            if not (item_id and is_missing_relation_error(error)):
+                raise
+            item_collection_table_missing = True
 
     for collection_id in sorted(desired_ids - current_ids):
         try:
@@ -777,8 +794,26 @@ def set_paper_collections(supabase, paper_id, selected_collection_ids, item_id=N
                 .execute()
             )
         except APIError as error:
-            if not is_duplicate_key_error(error):
+            if item_id and is_missing_relation_error(error):
+                item_collection_table_missing = True
+                try:
+                    (
+                        supabase.table("collection_papers")
+                        .insert({"paper_id": paper_id, "collection_id": collection_id})
+                        .execute()
+                    )
+                except APIError as fallback_error:
+                    if not is_duplicate_key_error(fallback_error):
+                        raise RuntimeError(
+                            "collection_items migration is not applied, and the "
+                            "legacy collection_papers fallback could not save this "
+                            "membership. Apply the normalized collection migration."
+                        ) from fallback_error
+            elif not is_duplicate_key_error(error):
                 raise
+
+    if item_collection_table_missing:
+        return
 
 
 def copy_paper_tags(supabase, source_paper_id, target_paper_id):
