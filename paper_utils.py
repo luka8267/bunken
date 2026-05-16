@@ -750,6 +750,15 @@ def fetch_paper_collection_ids(supabase, paper_id, item_id=None):
     return sorted(collection_ids)
 
 
+def add_column_if_missing(columns, column):
+    if columns == "*":
+        return columns
+    selected_columns = [value.strip() for value in columns.split(",")]
+    if column in selected_columns:
+        return columns
+    return f"{columns}, {column}"
+
+
 def fetch_papers_for_collection(supabase, user_id, collection_id, columns="id, title, authors, year"):
     paper_ids = fetch_collection_paper_ids(supabase, collection_id)
     item_ids = fetch_collection_item_ids(supabase, collection_id)
@@ -757,7 +766,11 @@ def fetch_papers_for_collection(supabase, user_id, collection_id, columns="id, t
     if not reference_ids:
         return []
 
-    result = fetch_user_papers(supabase, user_id, columns=columns)
+    fetch_columns = add_column_if_missing(columns, "item_id") if item_ids else columns
+    try:
+        result = fetch_user_papers(supabase, user_id, columns=fetch_columns)
+    except APIError:
+        result = fetch_user_papers(supabase, user_id, columns=columns)
     return [
         paper
         for paper in (result.data or [])
