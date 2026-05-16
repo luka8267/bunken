@@ -895,23 +895,31 @@ elif menu == "一覧":
                                 if new_supporting_file
                                 else None
                             )
-                            update_paper_details(
-                                supabase,
-                                user_id,
-                                row_dict["id"],
-                                edit_status,
-                                edit_notes,
-                                normalize_url(edit_url) or None,
-                                item_id=item_id,
-                            )
-                            update_paper_files(
-                                supabase,
-                                user_id,
-                                row_dict["id"],
-                                pdf_path=new_pdf_path,
-                                supporting_path=new_supporting_path,
-                                item_id=item_id,
-                            )
+                            normalized_edit_url = normalize_url(edit_url) or None
+                            current_url = normalize_url(row_dict.get("url")) or None
+                            if (
+                                edit_status != (row_dict.get("status") or "")
+                                or edit_notes != (row_dict.get("notes") or "")
+                                or normalized_edit_url != current_url
+                            ):
+                                update_paper_details(
+                                    supabase,
+                                    user_id,
+                                    row_dict["id"],
+                                    edit_status,
+                                    edit_notes,
+                                    normalized_edit_url,
+                                    item_id=item_id,
+                                )
+                            if new_pdf_path or new_supporting_path:
+                                update_paper_files(
+                                    supabase,
+                                    user_id,
+                                    row_dict["id"],
+                                    pdf_path=new_pdf_path,
+                                    supporting_path=new_supporting_path,
+                                    item_id=item_id,
+                                )
                             if collections:
                                 set_paper_collections(
                                     supabase,

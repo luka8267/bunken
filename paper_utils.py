@@ -39,6 +39,16 @@ def is_duplicate_key_error(error):
     )
 
 
+def is_permission_error(error):
+    error_text = str(error).lower()
+    return (
+        "42501" in error_text
+        or "permission denied" in error_text
+        or "row-level security" in error_text
+        or "violates row-level security" in error_text
+    )
+
+
 def normalize_doi(doi):
     return (doi or "").strip()
 
@@ -782,7 +792,10 @@ def set_paper_collections(supabase, paper_id, selected_collection_ids, item_id=N
                 .execute()
             )
         except APIError as error:
-            if not (item_id and is_missing_relation_error(error)):
+            if not (
+                item_id
+                and (is_missing_relation_error(error) or is_permission_error(error))
+            ):
                 raise
             item_collection_table_missing = True
 
@@ -794,7 +807,7 @@ def set_paper_collections(supabase, paper_id, selected_collection_ids, item_id=N
                 .execute()
             )
         except APIError as error:
-            if item_id and is_missing_relation_error(error):
+            if item_id and (is_missing_relation_error(error) or is_permission_error(error)):
                 item_collection_table_missing = True
                 try:
                     (
