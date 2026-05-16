@@ -1,4 +1,6 @@
 db_backups/
+__pycache__/
+*.py[cod]
 *.dump
 *.backup
 *.sql.gz
