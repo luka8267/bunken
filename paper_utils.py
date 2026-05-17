@@ -1674,6 +1674,7 @@ def update_paper_details(
     notes,
     url=None,
     item_id=None,
+    doi=None,
     volume=None,
     issue=None,
     pages=None,
@@ -1691,6 +1692,8 @@ def update_paper_details(
         extra = (item_result.data or [{}])[0].get("extra") or {}
         extra["legacy_status"] = status
         fields = {"abstract_note": notes, "extra": extra}
+        if doi is not None:
+            fields["doi"] = doi or None
         if url is not None:
             fields["url"] = url
         metadata_fields = {
@@ -1725,6 +1728,8 @@ def update_paper_details(
         return
 
     fields = {"status": status, "notes": notes}
+    if doi is not None:
+        fields["doi"] = doi or None
     if url is not None:
         fields["url"] = url
 

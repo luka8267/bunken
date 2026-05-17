@@ -52,6 +52,7 @@ from paper_utils import (
     merge_duplicate_paper,
     move_paper,
     normalize_doi,
+    normalize_title_for_match,
     paper_has_document_citation_refs,
     save_tags_for_paper,
     save_tags_for_item,
@@ -403,6 +404,21 @@ def extract_doi(text):
     return match.group(0).rstrip(").,;]")
 
 
+def crossref_message_to_metadata(data):
+    title = data["title"][0] if data.get("title") else ""
+    authors = ", ".join(author.get("family", "") for author in data.get("author", []))
+    journal = data["container-title"][0] if data.get("container-title") else ""
+    volume = str(data.get("volume") or "")
+    issue = str(data.get("issue") or "")
+    pages = str(data.get("page") or "")
+    publisher = str(data.get("publisher") or "")
+
+    issued = data.get("issued", {}).get("date-parts", [])
+    year = issued[0][0] if issued and issued[0] else 0
+
+    return title, authors, journal, year, volume, issue, pages, publisher
+
+
 def fetch_doi(doi):
     normalized_doi = normalize_doi(doi)
     if not normalized_doi:
@@ -417,19 +433,81 @@ def fetch_doi(doi):
     except requests.RequestException:
         return None
 
-    data = response.json().get("message", {})
-    title = data["title"][0] if data.get("title") else ""
-    authors = ", ".join(author.get("family", "") for author in data.get("author", []))
-    journal = data["container-title"][0] if data.get("container-title") else ""
-    volume = str(data.get("volume") or "")
-    issue = str(data.get("issue") or "")
-    pages = str(data.get("page") or "")
-    publisher = str(data.get("publisher") or "")
+    return crossref_message_to_metadata(response.json().get("message", {}))
 
-    issued = data.get("issued", {}).get("date-parts", [])
-    year = issued[0][0] if issued and issued[0] else 0
 
-    return title, authors, journal, year, volume, issue, pages, publisher
+def fetch_crossref_candidate_by_title(title, year=None):
+    normalized_title = (title or "").strip()
+    if not normalized_title:
+        return None
+
+    try:
+        response = requests.get(
+            "https://api.crossref.org/works",
+            params={"query.title": normalized_title, "rows": 5},
+            headers={"User-Agent": "bunken/1.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+
+    requested_title = normalize_title_for_match(normalized_title)
+    requested_year = int(year or 0) if str(year or "").isdigit() else 0
+    best = None
+    best_score = 0
+    for item in response.json().get("message", {}).get("items", []):
+        candidate_title = item["title"][0] if item.get("title") else ""
+        candidate_year = 0
+        issued = item.get("issued", {}).get("date-parts", [])
+        if issued and issued[0]:
+            candidate_year = int(issued[0][0] or 0)
+
+        score = 0
+        if normalize_title_for_match(candidate_title) == requested_title:
+            score += 80
+        elif requested_title and requested_title in normalize_title_for_match(candidate_title):
+            score += 45
+        if requested_year and candidate_year == requested_year:
+            score += 20
+        doi = normalize_doi(item.get("DOI"))
+        if doi:
+            score += 10
+
+        if score > best_score:
+            metadata = crossref_message_to_metadata(item)
+            best = {
+                "doi": doi,
+                "title": metadata[0],
+                "authors": metadata[1],
+                "journal": metadata[2],
+                "year": metadata[3],
+                "volume": metadata[4],
+                "issue": metadata[5],
+                "pages": metadata[6],
+                "publisher": metadata[7],
+                "score": score,
+            }
+            best_score = score
+
+    if not best or best["score"] < 80:
+        return None
+    return best
+
+
+def build_missing_doi_candidates(papers):
+    candidates = []
+    for paper in papers:
+        if normalize_doi(paper.get("doi")):
+            continue
+        candidate = fetch_crossref_candidate_by_title(
+            paper.get("title"),
+            paper.get("year"),
+        )
+        if not candidate or not candidate.get("doi"):
+            continue
+        candidates.append({"paper": paper, "candidate": candidate})
+    return candidates
 
 
 def fetch_url_metadata(url):
@@ -760,6 +838,92 @@ elif menu == "一覧":
     else:
         records = df.to_dict(orient="records")
         tag_map = get_tag_map_for_papers(supabase, records)
+        missing_doi_records = [
+            record for record in records if not normalize_doi(record.get("doi"))
+        ]
+        with st.expander(f"DOI一括取得（未入力: {len(missing_doi_records)}件）"):
+            st.caption(
+                "Crossrefでタイトル検索し、タイトル一致または年一致の強い候補だけを表示します。"
+                "適用時も空のDOIだけを埋め、既存のDOIは上書きしません。"
+            )
+            if st.button("候補を検索", key="preview_missing_doi_candidates"):
+                with st.spinner("Crossrefで候補を検索しています..."):
+                    st.session_state["missing_doi_candidates"] = build_missing_doi_candidates(
+                        missing_doi_records
+                    )
+
+            candidates = st.session_state.get("missing_doi_candidates", [])
+            if candidates:
+                st.write(f"{len(candidates)}件の候補が見つかりました。")
+                for item in candidates:
+                    paper = item["paper"]
+                    candidate = item["candidate"]
+                    st.write(
+                        f"- {paper.get('title') or '無題'} "
+                        f"→ DOI: {candidate.get('doi')} "
+                        f"({candidate.get('journal') or '-'}, {candidate.get('year') or '-'})"
+                    )
+
+                apply_confirm = st.checkbox(
+                    "候補を確認しました。空欄のDOIと不足している巻・号・ページ・出版社を更新します。",
+                    key="apply_missing_doi_confirm",
+                )
+                if st.button("候補を適用", key="apply_missing_doi_candidates"):
+                    if not apply_confirm:
+                        st.error("適用するには確認チェックを入れてください。")
+                    else:
+                        updated_count = 0
+                        skipped_count = 0
+                        for item in candidates:
+                            paper = item["paper"]
+                            candidate = item["candidate"]
+                            if normalize_doi(paper.get("doi")):
+                                skipped_count += 1
+                                continue
+                            existing = find_existing_user_paper_by_doi(
+                                supabase,
+                                user_id,
+                                candidate["doi"],
+                                columns="id, item_id, title",
+                            )
+                            existing_ids = {
+                                str(existing.get("id")),
+                                str(existing.get("item_id")),
+                            } if existing else set()
+                            paper_ids = {
+                                str(paper.get("id")),
+                                str(paper.get("item_id")),
+                            }
+                            if existing and not (existing_ids & paper_ids):
+                                skipped_count += 1
+                                continue
+
+                            update_paper_details(
+                                supabase,
+                                user_id,
+                                paper["id"],
+                                paper.get("status") or "",
+                                paper.get("notes") or "",
+                                normalize_url(paper.get("url")) or None,
+                                item_id=clean_optional_id(paper.get("item_id")),
+                                doi=candidate["doi"],
+                                volume=paper.get("volume") or candidate.get("volume") or "",
+                                issue=paper.get("issue") or candidate.get("issue") or "",
+                                pages=paper.get("pages") or candidate.get("pages") or "",
+                                publisher=paper.get("publisher")
+                                or candidate.get("publisher")
+                                or "",
+                            )
+                            updated_count += 1
+                        st.session_state.pop("missing_doi_candidates", None)
+                        st.success(
+                            f"DOI候補を適用しました: 更新 {updated_count}件 / スキップ {skipped_count}件"
+                        )
+                        st.rerun()
+            elif missing_doi_records:
+                st.write("候補検索を実行してください。")
+            else:
+                st.write("DOI未入力の文献はありません。")
         try:
             collections_result = fetch_user_collections(supabase, user_id)
             collections = collections_result.data or []
@@ -788,6 +952,8 @@ elif menu == "一覧":
                 st.markdown(f"### [{row_dict['ref_no']}] {row_dict['title']}")
                 st.write(f"著者: {row_dict['authors']}")
                 st.write(f"雑誌: {row_dict['journal']} ({row_dict['year']})")
+                if row_dict.get("doi"):
+                    st.write(f"DOI: {row_dict['doi']}")
 
                 if row_dict.get("status"):
                     st.write(f"ステータス: {row_dict['status']}")
@@ -889,6 +1055,11 @@ elif menu == "一覧":
                         value=paper_url,
                         key=f"url_{row_dict['id']}",
                     )
+                    edit_doi = st.text_input(
+                        "DOI",
+                        value=row_dict.get("doi") or "",
+                        key=f"doi_{row_dict['id']}",
+                    )
                     edit_meta_col1, edit_meta_col2 = st.columns(2)
                     with edit_meta_col1:
                         edit_volume = st.text_input(
@@ -962,10 +1133,13 @@ elif menu == "一覧":
                             )
                             normalized_edit_url = normalize_url(edit_url) or None
                             current_url = normalize_url(row_dict.get("url")) or None
+                            normalized_edit_doi = normalize_doi(edit_doi)
+                            current_doi = normalize_doi(row_dict.get("doi"))
                             if (
                                 edit_status != (row_dict.get("status") or "")
                                 or edit_notes != (row_dict.get("notes") or "")
                                 or normalized_edit_url != current_url
+                                or normalized_edit_doi != current_doi
                                 or edit_volume != (row_dict.get("volume") or "")
                                 or edit_issue != (row_dict.get("issue") or "")
                                 or edit_pages != (row_dict.get("pages") or "")
@@ -979,6 +1153,7 @@ elif menu == "一覧":
                                     edit_notes,
                                     normalized_edit_url,
                                     item_id=item_id,
+                                    doi=normalized_edit_doi,
                                     volume=edit_volume,
                                     issue=edit_issue,
                                     pages=edit_pages,

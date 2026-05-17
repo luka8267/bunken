@@ -8,6 +8,7 @@ from paper_utils import (
     get_tag_map_for_papers,
     make_word_citation,
     strip_metadata_columns,
+    update_paper_details,
 )
 
 
@@ -26,6 +27,10 @@ class Query:
     def select(self, *_args):
         return self
 
+    def update(self, values):
+        self.calls.append((self.table_name, "update", dict(values)))
+        return self
+
     def eq(self, column, value):
         self.calls.append((self.table_name, "eq", column, value))
         self.rows = [row for row in self.rows if row.get(column) == value]
@@ -38,6 +43,9 @@ class Query:
         return self
 
     def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args):
         return self
 
     def execute(self):
@@ -86,6 +94,44 @@ class PaperUtilsCollectionTests(unittest.TestCase):
 
         self.assertIn("Journal, 12(3), 45-67", citation)
         self.assertIn("https://doi.org/10.1000/example", citation)
+
+    def test_update_legacy_paper_details_can_edit_doi(self):
+        supabase = FakeSupabase({"papers": [{"id": "p1", "user_id": "u1"}]})
+
+        update_paper_details(
+            supabase,
+            "u1",
+            "p1",
+            "未読",
+            "note",
+            doi="10.1000/example",
+        )
+
+        self.assertIn(
+            (
+                "papers",
+                "update",
+                {"status": "未読", "notes": "note", "doi": "10.1000/example"},
+            ),
+            supabase.calls,
+        )
+
+    def test_update_item_details_can_clear_doi(self):
+        supabase = FakeSupabase({"items": [{"id": "item-1", "user_id": "u1", "extra": {}}]})
+
+        update_paper_details(
+            supabase,
+            "u1",
+            "paper-1",
+            "未読",
+            "note",
+            item_id="item-1",
+            doi="",
+        )
+
+        updates = [call for call in supabase.calls if call[0] == "items" and call[1] == "update"]
+        self.assertTrue(updates)
+        self.assertIsNone(updates[0][2]["doi"])
 
     def test_uuid_paper_id_uses_collection_items_only(self):
         supabase = FakeSupabase(
