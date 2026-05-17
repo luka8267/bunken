@@ -49,6 +49,7 @@ from paper_utils import (
     filter_document_citations,
     filter_papers,
     find_duplicate_paper_groups,
+    get_document_citation_usage_map,
     get_next_display_order,
     get_tag_map_for_papers,
     make_word_citation,
@@ -265,6 +266,38 @@ def get_paper_tag_list(tag_map, paper):
     return list(dict.fromkeys(tags))
 
 
+def get_paper_usage_entries(citation_usage_map, paper):
+    if not citation_usage_map:
+        return []
+    entries = []
+    seen = set()
+    for reference_id in (paper.get("id"), clean_optional_id(paper.get("item_id"))):
+        if reference_id is None:
+            continue
+        for entry in citation_usage_map.get(str(reference_id), []):
+            key = (
+                entry.get("document_title"),
+                entry.get("citation_text"),
+                entry.get("context_text"),
+                entry.get("reference_number"),
+                entry.get("locator"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append(entry)
+    return entries
+
+
+def get_citation_usage_map_for_display(user_id, papers):
+    try:
+        return get_document_citation_usage_map(supabase, user_id, papers)
+    except Exception:
+        logger.exception("Failed to fetch document citation usage")
+        st.warning("Word引用情報の取得に失敗しました。文献一覧は表示します。")
+        return {}
+
+
 def clean_optional_id(value):
     if value is None:
         return None
@@ -277,7 +310,7 @@ def clean_optional_id(value):
     return text or None
 
 
-def render_paper_summary(paper, tag_map=None, show_id=False):
+def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=None):
     paper_url = normalize_url(paper.get("url"))
     signed_url = create_pdf_signed_url(supabase, paper.get("pdf_path"), 3600)
     supporting_url = create_pdf_signed_url(supabase, paper.get("supporting_path"), 3600)
@@ -321,6 +354,27 @@ def render_paper_summary(paper, tag_map=None, show_id=False):
         tags_list = get_paper_tag_list(tag_map, paper)
         if tags_list:
             st.write("タグ:", ", ".join(tags_list))
+
+    usage_entries = get_paper_usage_entries(citation_usage_map, paper)
+    if usage_entries:
+        with st.expander(f"Word引用 ({len(usage_entries)}件)"):
+            for entry in usage_entries:
+                heading = entry.get("document_title") or "無題"
+                citation_text = entry.get("citation_text")
+                if citation_text:
+                    heading += f" / {citation_text}"
+                st.markdown(f"**{heading}**")
+                if entry.get("context_text"):
+                    st.write(entry["context_text"])
+                details = []
+                if entry.get("reference_number"):
+                    details.append(f"参考文献番号: {entry['reference_number']}")
+                if entry.get("locator"):
+                    details.append(f"位置: {entry['locator']}")
+                if entry.get("updated_at"):
+                    details.append(f"更新: {entry['updated_at']}")
+                if details:
+                    st.caption(" / ".join(details))
 
     actions = st.columns(3)
     with actions[0]:
@@ -842,9 +896,14 @@ elif menu == "検索":
         else:
             st.write(f"{len(papers)}件見つかりました")
             tag_map = get_tag_map_for_papers(supabase, papers)
+            citation_usage_map = get_citation_usage_map_for_display(user_id, papers)
             for paper in papers:
                 with st.container():
-                    render_paper_summary(paper, tag_map=tag_map)
+                    render_paper_summary(
+                        paper,
+                        tag_map=tag_map,
+                        citation_usage_map=citation_usage_map,
+                    )
                     st.divider()
 
 
@@ -872,6 +931,7 @@ elif menu == "一覧":
     else:
         records = df.to_dict(orient="records")
         tag_map = get_tag_map_for_papers(supabase, records)
+        citation_usage_map = get_citation_usage_map_for_display(user_id, records)
         missing_doi_records = [
             record for record in records if not normalize_doi(record.get("doi"))
         ]
@@ -1082,6 +1142,26 @@ elif menu == "一覧":
                 tags_list = get_paper_tag_list(tag_map, row_dict)
                 if tags_list:
                     st.write("タグ:", ", ".join(tags_list))
+
+                usage_entries = get_paper_usage_entries(citation_usage_map, row_dict)
+                if usage_entries:
+                    with st.expander(f"Word引用 ({len(usage_entries)}件)"):
+                        for entry in usage_entries:
+                            heading = entry.get("document_title") or "無題"
+                            if entry.get("citation_text"):
+                                heading += f" / {entry['citation_text']}"
+                            st.markdown(f"**{heading}**")
+                            if entry.get("context_text"):
+                                st.write(entry["context_text"])
+                            details = []
+                            if entry.get("reference_number"):
+                                details.append(f"参考文献番号: {entry['reference_number']}")
+                            if entry.get("locator"):
+                                details.append(f"位置: {entry['locator']}")
+                            if entry.get("updated_at"):
+                                details.append(f"更新: {entry['updated_at']}")
+                            if details:
+                                st.caption(" / ".join(details))
 
                 col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 
@@ -1361,9 +1441,14 @@ elif menu == "タグ検索":
                     st.write("見つかりません")
                 else:
                     tag_map = get_tag_map_for_papers(supabase, papers)
+                    citation_usage_map = get_citation_usage_map_for_display(user_id, papers)
                     for paper in papers:
                         with st.container():
-                            render_paper_summary(paper, tag_map=tag_map)
+                            render_paper_summary(
+                                paper,
+                                tag_map=tag_map,
+                                citation_usage_map=citation_usage_map,
+                            )
                             st.divider()
 
 

@@ -8,6 +8,7 @@ from paper_utils import (
     fetch_collection_counts,
     fetch_paper_collection_ids,
     filter_document_citations,
+    get_document_citation_usage_map,
     get_tag_map_for_papers,
     make_word_citation,
     strip_metadata_columns,
@@ -301,6 +302,44 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         self.assertEqual(rows[0]["文献タイトル"], "Title")
         self.assertNotIn("paper_id", rows[0])
         self.assertNotIn("paperId", rows[0])
+
+    def test_document_citation_usage_map_collects_context_by_paper_id(self):
+        supabase = FakeSupabase(
+            {
+                "documents": [
+                    {
+                        "id": "doc-1",
+                        "user_id": "u1",
+                        "title": "Manuscript",
+                    }
+                ],
+                "document_citations": [
+                    {
+                        "document_id": "doc-1",
+                        "rendered_text": "1",
+                        "context_text": "この論文では重要である1)。",
+                        "updated_at": "2026-05-17",
+                        "citation_items": [
+                            {
+                                "paperId": "paper-1",
+                                "referenceNumber": 1,
+                                "locator": "p. 10",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        usage_map = get_document_citation_usage_map(
+            supabase,
+            "u1",
+            [{"id": "paper-1", "item_id": None}],
+        )
+
+        self.assertEqual(usage_map["paper-1"][0]["document_title"], "Manuscript")
+        self.assertEqual(usage_map["paper-1"][0]["context_text"], "この論文では重要である1)。")
+        self.assertEqual(usage_map["paper-1"][0]["reference_number"], 1)
 
 
 if __name__ == "__main__":

@@ -725,6 +725,40 @@ def build_document_citation_export_rows(citations, paper_map):
     return rows
 
 
+def get_document_citation_usage_map(supabase, user_id, papers):
+    paper_refs = {
+        str(reference_id)
+        for paper in papers
+        for reference_id in get_paper_reference_ids(paper)
+    }
+    usage_map = {reference_id: [] for reference_id in paper_refs}
+    if not paper_refs:
+        return usage_map
+
+    documents_result = fetch_user_documents(supabase, user_id)
+    for document in documents_result.data or []:
+        citations_result = fetch_document_citations(supabase, document["id"])
+        for citation in citations_result.data or []:
+            for item in citation.get("citation_items") or []:
+                if not isinstance(item, dict):
+                    continue
+                paper_id = str(item.get("paperId") or "")
+                if paper_id not in paper_refs:
+                    continue
+                usage_map.setdefault(paper_id, []).append(
+                    {
+                        "document_title": document.get("title") or "無題",
+                        "citation_text": citation.get("rendered_text") or "",
+                        "context_text": citation.get("context_text") or "",
+                        "reference_number": item.get("referenceNumber"),
+                        "locator": item.get("locator"),
+                        "updated_at": citation.get("updated_at") or "",
+                    }
+                )
+
+    return usage_map
+
+
 def replace_paper_id_in_document_citations(supabase, user_id, source_paper_id, target_paper_id):
     source_ids = source_paper_id if isinstance(source_paper_id, (list, tuple, set)) else [source_paper_id]
     source_texts = {str(source_id) for source_id in source_ids if source_id is not None}
