@@ -1,5 +1,10 @@
 # bunken
 
+## Development docs
+
+- [Development plan](docs/DEVELOPMENT_PLAN.md)
+- [DB backup runbook](docs/DB_BACKUP_RUNBOOK.md)
+
 ## Password reset setup
 
 In Supabase Dashboard > Authentication > URL Configuration, add the app URL to
