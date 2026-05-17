@@ -6,6 +6,8 @@ from paper_utils import (
     fetch_collection_counts,
     fetch_paper_collection_ids,
     get_tag_map_for_papers,
+    make_word_citation,
+    strip_metadata_columns,
 )
 
 
@@ -56,6 +58,35 @@ class FakeSupabase:
 
 
 class PaperUtilsCollectionTests(unittest.TestCase):
+    def test_strip_metadata_columns_keeps_legacy_view_columns(self):
+        columns = (
+            "id, item_id, title, authors, journal, year, doi, url, volume, issue, "
+            "pages, publisher, item_type, status, notes"
+        )
+
+        self.assertEqual(
+            strip_metadata_columns(columns),
+            "id, item_id, title, authors, journal, year, doi, url, status, notes",
+        )
+
+    def test_make_word_citation_includes_publication_metadata(self):
+        citation = make_word_citation(
+            {
+                "authors": "Alpha",
+                "year": 2026,
+                "title": "Metadata Test",
+                "journal": "Journal",
+                "volume": "12",
+                "issue": "3",
+                "pages": "45-67",
+                "doi": "10.1000/example",
+            },
+            style="APA",
+        )
+
+        self.assertIn("Journal, 12(3), 45-67", citation)
+        self.assertIn("https://doi.org/10.1000/example", citation)
+
     def test_uuid_paper_id_uses_collection_items_only(self):
         supabase = FakeSupabase(
             {
