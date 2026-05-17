@@ -615,7 +615,7 @@ def fetch_document_citations(supabase, document_id):
         supabase.table("document_citations")
         .select(
             "id, citation_key, word_control_id, citation_items, rendered_text, "
-            "sort_order, updated_at"
+            "context_text, sort_order, updated_at"
         )
         .eq("document_id", document_id)
         .order("sort_order")

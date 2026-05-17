@@ -1723,8 +1723,13 @@ elif menu == "文書引用":
             for citation in citations:
                 with st.container():
                     rendered_text = citation.get("rendered_text") or "引用"
+                    context_text = citation.get("context_text") or ""
                     sort_order = citation.get("sort_order") or "-"
-                    st.markdown(f"**{sort_order}. 引用に使った文: {rendered_text}**")
+                    st.markdown(f"**{sort_order}. {rendered_text}**")
+                    if context_text:
+                        st.write(f"引用に使った文: {context_text}")
+                    else:
+                        st.caption("引用に使った文はまだ同期されていません。Wordアドインで参考文献を更新すると反映されます。")
 
                     items = citation.get("citation_items") or []
                     if items:
