@@ -65,9 +65,18 @@ from paper_utils import (
     upload_supporting_file_to_storage,
 )
 
-DOI_FORM_FIELDS = ("title", "authors", "journal", "year")
+DOI_FORM_FIELDS = (
+    "title",
+    "authors",
+    "journal",
+    "year",
+    "volume",
+    "issue",
+    "pages",
+    "publisher",
+)
 DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.IGNORECASE)
-URL_FORM_FIELDS = ("title", "authors", "journal", "year", "doi")
+URL_FORM_FIELDS = (*DOI_FORM_FIELDS, "doi")
 SUPPORTING_FILE_TYPES = [
     "pdf",
     "zip",
@@ -278,6 +287,16 @@ def render_paper_summary(paper, tag_map=None, show_id=False):
         st.write(f"著者: {paper.get('authors')}")
     if paper.get("journal") or paper.get("year"):
         st.write(f"雑誌: {paper.get('journal') or ''} ({paper.get('year') or '-'})")
+    publication_parts = []
+    if paper.get("volume"):
+        issue = f"({paper.get('issue')})" if paper.get("issue") else ""
+        publication_parts.append(f"{paper.get('volume')}{issue}")
+    if paper.get("pages"):
+        publication_parts.append(f"pp. {paper.get('pages')}")
+    if paper.get("publisher"):
+        publication_parts.append(paper.get("publisher"))
+    if publication_parts:
+        st.caption(" / ".join(publication_parts))
     if paper.get("doi"):
         st.write(f"DOI: {paper.get('doi')}")
     if paper.get("status"):
@@ -402,11 +421,15 @@ def fetch_doi(doi):
     title = data["title"][0] if data.get("title") else ""
     authors = ", ".join(author.get("family", "") for author in data.get("author", []))
     journal = data["container-title"][0] if data.get("container-title") else ""
+    volume = str(data.get("volume") or "")
+    issue = str(data.get("issue") or "")
+    pages = str(data.get("page") or "")
+    publisher = str(data.get("publisher") or "")
 
     issued = data.get("issued", {}).get("date-parts", [])
     year = issued[0][0] if issued and issued[0] else 0
 
-    return title, authors, journal, year
+    return title, authors, journal, year, volume, issue, pages, publisher
 
 
 def fetch_url_metadata(url):
@@ -465,11 +488,18 @@ def fetch_url_metadata(url):
     year = int(year_match.group(0)) if year_match else 0
     doi = first("citation_doi", "dc.identifier")
     doi = extract_doi(doi) or doi
+    volume = first("citation_volume")
+    issue = first("citation_issue")
+    pages = first("citation_firstpage")
+    last_page = first("citation_lastpage")
+    if pages and last_page:
+        pages = f"{pages}-{last_page}"
+    publisher = first("citation_publisher", "dc.publisher")
 
-    if not any([title, authors, journal, year, doi]):
+    if not any([title, authors, journal, year, doi, volume, issue, pages, publisher]):
         return None
 
-    return title, authors, journal, year, doi
+    return title, authors, journal, year, volume, issue, pages, publisher, doi
 
 
 if "user_id" not in st.session_state:
@@ -571,6 +601,13 @@ if menu == "追加":
     authors = st.text_input("著者", value=st.session_state.get("authors", ""))
     journal = st.text_input("雑誌", value=st.session_state.get("journal", ""))
     year = st.number_input("年", value=int(st.session_state.get("year", 2024)), step=1)
+    meta_col1, meta_col2 = st.columns(2)
+    with meta_col1:
+        volume = st.text_input("巻", value=st.session_state.get("volume", ""))
+        pages = st.text_input("ページ", value=st.session_state.get("pages", ""))
+    with meta_col2:
+        issue = st.text_input("号", value=st.session_state.get("issue", ""))
+        publisher = st.text_input("出版社", value=st.session_state.get("publisher", ""))
     pdf_file = st.file_uploader("PDFアップロード", type=["pdf"])
     supporting_file = st.file_uploader(
         "サポーティング資料アップロード",
@@ -639,6 +676,10 @@ if menu == "追加":
                 status,
                 notes,
                 next_order,
+                volume,
+                issue,
+                pages,
+                publisher,
             )
             if created_paper.get("item_id"):
                 save_tags_for_item(supabase, user_id, created_paper["item_id"], tags)
@@ -670,8 +711,9 @@ elif menu == "検索":
             supabase,
             user_id,
             columns=(
-                "id, item_id, title, authors, journal, year, doi, url, status, notes, "
-                "pdf_path, supporting_path, display_order"
+                "id, item_id, title, authors, journal, year, doi, url, volume, issue, "
+                "pages, publisher, item_type, status, notes, pdf_path, "
+                "supporting_path, display_order"
             ),
         )
         papers = filter_papers(
@@ -847,6 +889,29 @@ elif menu == "一覧":
                         value=paper_url,
                         key=f"url_{row_dict['id']}",
                     )
+                    edit_meta_col1, edit_meta_col2 = st.columns(2)
+                    with edit_meta_col1:
+                        edit_volume = st.text_input(
+                            "巻",
+                            value=row_dict.get("volume") or "",
+                            key=f"volume_{row_dict['id']}",
+                        )
+                        edit_pages = st.text_input(
+                            "ページ",
+                            value=row_dict.get("pages") or "",
+                            key=f"pages_{row_dict['id']}",
+                        )
+                    with edit_meta_col2:
+                        edit_issue = st.text_input(
+                            "号",
+                            value=row_dict.get("issue") or "",
+                            key=f"issue_{row_dict['id']}",
+                        )
+                        edit_publisher = st.text_input(
+                            "出版社",
+                            value=row_dict.get("publisher") or "",
+                            key=f"publisher_{row_dict['id']}",
+                        )
                     selected_collection_labels = []
                     if collections:
                         try:
@@ -901,6 +966,10 @@ elif menu == "一覧":
                                 edit_status != (row_dict.get("status") or "")
                                 or edit_notes != (row_dict.get("notes") or "")
                                 or normalized_edit_url != current_url
+                                or edit_volume != (row_dict.get("volume") or "")
+                                or edit_issue != (row_dict.get("issue") or "")
+                                or edit_pages != (row_dict.get("pages") or "")
+                                or edit_publisher != (row_dict.get("publisher") or "")
                             ):
                                 update_paper_details(
                                     supabase,
@@ -910,6 +979,10 @@ elif menu == "一覧":
                                     edit_notes,
                                     normalized_edit_url,
                                     item_id=item_id,
+                                    volume=edit_volume,
+                                    issue=edit_issue,
+                                    pages=edit_pages,
+                                    publisher=edit_publisher,
                                 )
                             if new_pdf_path or new_supporting_path:
                                 update_paper_files(
@@ -992,7 +1065,8 @@ elif menu == "タグ検索":
                     user_id,
                     columns=(
                         "id, item_id, title, authors, journal, year, doi, url, "
-                        "status, notes, pdf_path, supporting_path, display_order"
+                        "volume, issue, pages, publisher, item_type, status, notes, "
+                        "pdf_path, supporting_path, display_order"
                     ),
                 )
                 papers = [
@@ -1119,8 +1193,8 @@ elif menu == "重複確認":
         supabase,
         user_id,
         columns=(
-            "id, item_id, title, authors, journal, year, doi, url, status, notes, "
-            "pdf_path, supporting_path"
+            "id, item_id, title, authors, journal, year, doi, url, volume, issue, "
+            "pages, publisher, item_type, status, notes, pdf_path, supporting_path"
         ),
     )
     papers = result.data or []

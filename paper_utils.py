@@ -13,6 +13,7 @@ except ImportError:
 
 BUCKET_NAME = "paper-pdfs"
 PAPER_ITEMS_VIEW = "paper_items_view"
+ITEM_METADATA_COLUMNS = ("volume", "issue", "pages", "publisher", "item_type")
 SAFE_STORAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 SAFE_STORAGE_EXT_RE = re.compile(r"[^A-Za-z0-9]")
 MAX_STORAGE_BASENAME_LENGTH = 80
@@ -28,6 +29,25 @@ def is_missing_relation_error(error):
         or ("could not find the table" in error_text and "schema cache" in error_text)
         or ("could not find" in error_text and "relation" in error_text)
     )
+
+
+def is_missing_metadata_column_error(error):
+    error_text = str(error).lower()
+    if "could not find" not in error_text and "column" not in error_text:
+        return False
+    return any(column in error_text for column in ITEM_METADATA_COLUMNS)
+
+
+def strip_metadata_columns(columns):
+    if columns == "*":
+        return columns
+
+    kept_columns = []
+    for column in (columns or "").split(","):
+        normalized = column.strip()
+        if normalized and normalized not in ITEM_METADATA_COLUMNS:
+            kept_columns.append(normalized)
+    return ", ".join(kept_columns) or columns
 
 
 def is_duplicate_key_error(error):
@@ -152,10 +172,14 @@ def fetch_user_papers(supabase, user_id, columns="*"):
             .execute()
         )
     except APIError as error:
+        if is_missing_metadata_column_error(error):
+            fallback_columns = strip_metadata_columns(columns)
+            if fallback_columns != columns:
+                return fetch_user_papers(supabase, user_id, fallback_columns)
         if is_missing_relation_error(error):
             return (
                 supabase.table("papers")
-                .select(columns)
+                .select(strip_metadata_columns(columns))
                 .eq("user_id", user_id)
                 .order("display_order")
                 .execute()
@@ -186,12 +210,21 @@ def search_user_papers(supabase, user_id, keyword, columns="id, title, authors, 
     try:
         return query.execute()
     except APIError as error:
+        if is_missing_metadata_column_error(error):
+            fallback_columns = strip_metadata_columns(columns)
+            if fallback_columns != columns:
+                return search_user_papers(
+                    supabase,
+                    user_id,
+                    keyword,
+                    fallback_columns,
+                )
         if not is_missing_relation_error(error):
             raise
 
     query = (
         supabase.table("papers")
-        .select(columns)
+        .select(strip_metadata_columns(columns))
         .eq("user_id", user_id)
         .order("display_order")
     )
@@ -263,12 +296,21 @@ def fetch_user_papers_by_ids(supabase, user_id, paper_ids, columns="id, title"):
             .execute()
         )
     except APIError as error:
+        if is_missing_metadata_column_error(error):
+            fallback_columns = strip_metadata_columns(columns)
+            if fallback_columns != columns:
+                return fetch_user_papers_by_ids(
+                    supabase,
+                    user_id,
+                    paper_ids,
+                    fallback_columns,
+                )
         if not is_missing_relation_error(error):
             raise
 
     return (
         supabase.table("papers")
-        .select(columns)
+        .select(strip_metadata_columns(columns))
         .eq("user_id", user_id)
         .in_("id", paper_ids)
         .execute()
@@ -290,11 +332,20 @@ def find_existing_user_paper_by_doi(supabase, user_id, doi, columns="id, title")
             .execute()
         )
     except APIError as error:
+        if is_missing_metadata_column_error(error):
+            fallback_columns = strip_metadata_columns(columns)
+            if fallback_columns != columns:
+                return find_existing_user_paper_by_doi(
+                    supabase,
+                    user_id,
+                    doi,
+                    fallback_columns,
+                )
         if not is_missing_relation_error(error):
             raise
         result = (
             supabase.table("papers")
-            .select(columns)
+            .select(strip_metadata_columns(columns))
             .eq("user_id", user_id)
             .eq("doi", normalized_doi)
             .limit(1)
@@ -379,25 +430,38 @@ def create_item_backed_paper(
     status,
     notes,
     display_order,
+    volume="",
+    issue="",
+    pages="",
+    publisher="",
+    item_type="journalArticle",
 ):
+    item_payload = {
+        "user_id": user_id,
+        "item_type": item_type or "journalArticle",
+        "title": title,
+        "publication_title": journal,
+        "year": int(year),
+        "doi": doi or None,
+        "url": url or None,
+        "abstract_note": notes,
+        "extra": {
+            "legacy_status": status,
+            "legacy_display_order": str(display_order),
+        },
+    }
+    for field, value in (
+        ("volume", volume),
+        ("issue", issue),
+        ("pages", pages),
+        ("publisher", publisher),
+    ):
+        if value:
+            item_payload[field] = value
+
     item_result = (
         supabase.table("items")
-        .insert(
-            {
-                "user_id": user_id,
-                "item_type": "journalArticle",
-                "title": title,
-                "publication_title": journal,
-                "year": int(year),
-                "doi": doi or None,
-                "url": url or None,
-                "abstract_note": notes,
-                "extra": {
-                    "legacy_status": status,
-                    "legacy_display_order": str(display_order),
-                },
-            }
-        )
+        .insert(item_payload)
         .execute()
     )
     item_id = item_result.data[0]["id"]
@@ -421,6 +485,11 @@ def create_legacy_paper(
     status,
     notes,
     display_order,
+    volume="",
+    issue="",
+    pages="",
+    publisher="",
+    item_type="journalArticle",
 ):
     insert_result = (
         supabase.table("papers")
@@ -459,23 +528,52 @@ def create_user_paper(
     status,
     notes,
     display_order,
+    volume="",
+    issue="",
+    pages="",
+    publisher="",
+    item_type="journalArticle",
 ):
     try:
-        return create_item_backed_paper(
-            supabase,
-            user_id,
-            title,
-            authors,
-            journal,
-            year,
-            doi,
-            url,
-            pdf_path,
-            supporting_path,
-            status,
-            notes,
-            display_order,
-        )
+        try:
+            return create_item_backed_paper(
+                supabase,
+                user_id,
+                title,
+                authors,
+                journal,
+                year,
+                doi,
+                url,
+                pdf_path,
+                supporting_path,
+                status,
+                notes,
+                display_order,
+                volume,
+                issue,
+                pages,
+                publisher,
+                item_type,
+            )
+        except APIError as error:
+            if not is_missing_metadata_column_error(error):
+                raise
+            return create_item_backed_paper(
+                supabase,
+                user_id,
+                title,
+                authors,
+                journal,
+                year,
+                doi,
+                url,
+                pdf_path,
+                supporting_path,
+                status,
+                notes,
+                display_order,
+            )
     except APIError as error:
         if not is_missing_relation_error(error) and "items" not in str(error).lower():
             raise
@@ -494,6 +592,11 @@ def create_user_paper(
         status,
         notes,
         display_order,
+        volume,
+        issue,
+        pages,
+        publisher,
+        item_type,
     )
 
 
@@ -1048,6 +1151,11 @@ def build_item_merge_update(keeper, duplicate):
         "year": "year",
         "doi": "doi",
         "url": "url",
+        "volume": "volume",
+        "issue": "issue",
+        "pages": "pages",
+        "publisher": "publisher",
+        "item_type": "item_type",
         "notes": "abstract_note",
     }
 
@@ -1232,21 +1340,31 @@ def make_word_citation(row, style="APA"):
     title = row.get("title", "")
     journal = row.get("journal", "")
     doi = row.get("doi", "")
+    volume = row.get("volume", "")
+    issue = row.get("issue", "")
+    pages = row.get("pages", "")
+    publication = journal
+    if volume:
+        publication += f", {volume}"
+        if issue:
+            publication += f"({issue})"
+    if pages:
+        publication += f", {pages}"
 
     if style == "APA":
-        citation = f"{authors} ({year}). {title}. {journal}."
+        citation = f"{authors} ({year}). {title}. {publication}."
         if doi:
             citation += f" https://doi.org/{doi}"
     elif style == "Vancouver":
-        citation = f"{authors}. {title}. {journal}. {year}."
+        citation = f"{authors}. {title}. {publication}. {year}."
         if doi:
             citation += f" doi:{doi}"
     elif style == "Nature":
-        citation = f"{authors} {title}. {journal} ({year})."
+        citation = f"{authors} {title}. {publication} ({year})."
         if doi:
             citation += f" https://doi.org/{doi}"
     else:
-        citation = f"{authors} ({year}). {title}. {journal}."
+        citation = f"{authors} ({year}). {title}. {publication}."
 
     return citation
 
@@ -1548,7 +1666,19 @@ def move_paper(supabase, user_id, paper_id, display_order, direction, item_id=No
     )
 
 
-def update_paper_details(supabase, user_id, paper_id, status, notes, url=None, item_id=None):
+def update_paper_details(
+    supabase,
+    user_id,
+    paper_id,
+    status,
+    notes,
+    url=None,
+    item_id=None,
+    volume=None,
+    issue=None,
+    pages=None,
+    publisher=None,
+):
     if item_id:
         item_result = (
             supabase.table("items")
@@ -1563,13 +1693,35 @@ def update_paper_details(supabase, user_id, paper_id, status, notes, url=None, i
         fields = {"abstract_note": notes, "extra": extra}
         if url is not None:
             fields["url"] = url
-        (
-            supabase.table("items")
-            .update(fields)
-            .eq("id", item_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
+        metadata_fields = {
+            "volume": volume,
+            "issue": issue,
+            "pages": pages,
+            "publisher": publisher,
+        }
+        for field, value in metadata_fields.items():
+            if value is not None:
+                fields[field] = value or None
+        try:
+            (
+                supabase.table("items")
+                .update(fields)
+                .eq("id", item_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+        except APIError as error:
+            if not is_missing_metadata_column_error(error):
+                raise
+            for field in ITEM_METADATA_COLUMNS:
+                fields.pop(field, None)
+            (
+                supabase.table("items")
+                .update(fields)
+                .eq("id", item_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
         return
 
     fields = {"status": status, "notes": notes}
