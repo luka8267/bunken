@@ -1547,13 +1547,68 @@ elif menu == "コレクション":
             st.error("このコレクションの文献を取得できませんでした。")
             st.stop()
 
-        st.subheader(f"{selected_label} ({len(papers)}件)")
+        collection_keyword = st.text_input(
+            "コレクション内検索",
+            key=f"collection_search_{selected_collection['id']}",
+        )
+        collection_sort = st.selectbox(
+            "コレクション内並び替え",
+            SORT_OPTIONS,
+            key=f"collection_sort_{selected_collection['id']}",
+        )
+        visible_papers = filter_papers(papers, keyword=collection_keyword)
+        if visible_papers:
+            visible_df = sort_papers_dataframe(pd.DataFrame(visible_papers), collection_sort)
+            visible_papers = visible_df.to_dict(orient="records")
+
+        st.subheader(f"{selected_label} ({len(visible_papers)} / {len(papers)}件)")
         if not papers:
             st.write("このコレクションにはまだ文献がありません。一覧の編集欄から追加できます。")
+        elif not visible_papers:
+            st.write("検索条件に一致する文献はありません。")
         else:
-            tag_map = get_tag_map_for_papers(supabase, papers)
-            citation_usage_map = get_citation_usage_map_for_display(user_id, papers)
-            for paper in papers:
+            safe_collection_name = re.sub(
+                r'[\\/:*?"<>|]+',
+                "_",
+                selected_collection.get("name") or "collection",
+            )
+            export_columns = {
+                "title": "タイトル",
+                "authors": "著者",
+                "journal": "掲載誌",
+                "year": "年",
+                "doi": "DOI",
+                "url": "URL",
+                "volume": "巻",
+                "issue": "号",
+                "pages": "ページ",
+                "publisher": "出版社",
+                "status": "ステータス",
+                "notes": "メモ",
+            }
+            export_df = pd.DataFrame(visible_papers)
+            export_df = export_df[
+                [column for column in export_columns if column in export_df.columns]
+            ].rename(columns=export_columns)
+            export_col1, export_col2 = st.columns(2)
+            with export_col1:
+                st.download_button(
+                    "表示中の文献をCSV出力",
+                    data=export_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"{safe_collection_name}_papers.csv",
+                    mime="text/csv",
+                )
+            with export_col2:
+                st.download_button(
+                    "表示中の文献をWord出力",
+                    data=export_to_word_bytes(visible_papers),
+                    file_name=f"{safe_collection_name}_references.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+
+            tag_map = get_tag_map_for_papers(supabase, visible_papers)
+            citation_usage_map = get_citation_usage_map_for_display(user_id, visible_papers)
+            for paper in visible_papers:
                 with st.container():
                     render_paper_summary(
                         paper,
