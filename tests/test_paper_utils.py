@@ -3,9 +3,11 @@ import unittest
 from postgrest.exceptions import APIError
 
 from paper_utils import (
+    build_document_citation_export_rows,
     delete_user_document,
     fetch_collection_counts,
     fetch_paper_collection_ids,
+    filter_document_citations,
     get_tag_map_for_papers,
     make_word_citation,
     strip_metadata_columns,
@@ -239,6 +241,66 @@ class PaperUtilsCollectionTests(unittest.TestCase):
                 ("documents", "eq", "user_id", "u1"),
             ],
         )
+
+    def test_filter_document_citations_searches_context_and_paper_fields(self):
+        citations = [
+            {
+                "rendered_text": "1",
+                "context_text": "この論文では相互作用を検討した1)。",
+                "citation_items": [{"paperId": "paper-1"}],
+            },
+            {
+                "rendered_text": "2",
+                "context_text": "別の引用です2)。",
+                "citation_items": [{"paperId": "paper-2"}],
+            },
+        ]
+        paper_map = {
+            "paper-1": {"title": "Methyl-pi Interactions", "authors": "Scheiner"},
+            "paper-2": {"title": "Halogen Bonding", "authors": "Wang"},
+        }
+
+        self.assertEqual(
+            filter_document_citations(citations, paper_map, "Scheiner"),
+            [citations[0]],
+        )
+        self.assertEqual(
+            filter_document_citations(citations, paper_map, "別の引用"),
+            [citations[1]],
+        )
+
+    def test_build_document_citation_export_rows_excludes_internal_ids(self):
+        rows = build_document_citation_export_rows(
+            [
+                {
+                    "sort_order": 1,
+                    "rendered_text": "1",
+                    "context_text": "この論文では重要である1)。",
+                    "updated_at": "2026-05-17",
+                    "citation_items": [
+                        {
+                            "paperId": "paper-1",
+                            "referenceNumber": 1,
+                            "locator": "p. 10",
+                        }
+                    ],
+                }
+            ],
+            {
+                "paper-1": {
+                    "title": "Title",
+                    "authors": "Author",
+                    "year": 2026,
+                    "journal": "Journal",
+                    "doi": "10.1000/example",
+                }
+            },
+        )
+
+        self.assertEqual(rows[0]["引用に使った文"], "この論文では重要である1)。")
+        self.assertEqual(rows[0]["文献タイトル"], "Title")
+        self.assertNotIn("paper_id", rows[0])
+        self.assertNotIn("paperId", rows[0])
 
 
 if __name__ == "__main__":

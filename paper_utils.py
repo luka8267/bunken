@@ -639,6 +639,92 @@ def delete_user_document(supabase, user_id, document_id):
     )
 
 
+def citation_search_text(citation, paper_map):
+    parts = [
+        citation.get("rendered_text"),
+        citation.get("context_text"),
+        citation.get("updated_at"),
+    ]
+    for item in citation.get("citation_items") or []:
+        if not isinstance(item, dict):
+            continue
+        parts.extend(
+            [
+                item.get("locator"),
+                item.get("referenceNumber"),
+            ]
+        )
+        paper = paper_map.get(str(item.get("paperId") or ""))
+        if paper:
+            parts.extend(
+                [
+                    paper.get("title"),
+                    paper.get("authors"),
+                    paper.get("journal"),
+                    paper.get("year"),
+                    paper.get("doi"),
+                ]
+            )
+    return " ".join(str(part) for part in parts if part not in (None, ""))
+
+
+def filter_document_citations(citations, paper_map, keyword):
+    normalized_keyword = (keyword or "").strip().lower()
+    if not normalized_keyword:
+        return list(citations)
+    return [
+        citation
+        for citation in citations
+        if normalized_keyword in citation_search_text(citation, paper_map).lower()
+    ]
+
+
+def build_document_citation_export_rows(citations, paper_map):
+    rows = []
+    for citation in citations:
+        base = {
+            "順序": citation.get("sort_order") or "",
+            "引用表示": citation.get("rendered_text") or "",
+            "引用に使った文": citation.get("context_text") or "",
+            "更新日時": citation.get("updated_at") or "",
+        }
+        items = [
+            item
+            for item in (citation.get("citation_items") or [])
+            if isinstance(item, dict)
+        ]
+        if not items:
+            rows.append(
+                {
+                    **base,
+                    "文献タイトル": "",
+                    "著者": "",
+                    "年": "",
+                    "掲載誌": "",
+                    "DOI": "",
+                    "参考文献番号": "",
+                    "位置": "",
+                }
+            )
+            continue
+
+        for item in items:
+            paper = paper_map.get(str(item.get("paperId") or "")) or {}
+            rows.append(
+                {
+                    **base,
+                    "文献タイトル": paper.get("title") or "",
+                    "著者": paper.get("authors") or "",
+                    "年": paper.get("year") or "",
+                    "掲載誌": paper.get("journal") or "",
+                    "DOI": paper.get("doi") or "",
+                    "参考文献番号": item.get("referenceNumber") or "",
+                    "位置": item.get("locator") or "",
+                }
+            )
+    return rows
+
+
 def replace_paper_id_in_document_citations(supabase, user_id, source_paper_id, target_paper_id):
     source_ids = source_paper_id if isinstance(source_paper_id, (list, tuple, set)) else [source_paper_id]
     source_texts = {str(source_id) for source_id in source_ids if source_id is not None}

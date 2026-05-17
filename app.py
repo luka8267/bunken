@@ -28,6 +28,7 @@ from auth_utils import (
 from paper_utils import (
     READING_STATUSES,
     SORT_OPTIONS,
+    build_document_citation_export_rows,
     create_collection,
     create_user_paper,
     create_pdf_signed_url,
@@ -45,6 +46,7 @@ from paper_utils import (
     fetch_user_papers_by_ids,
     fetch_user_collections,
     fetch_user_documents,
+    filter_document_citations,
     filter_papers,
     find_duplicate_paper_groups,
     get_next_display_order,
@@ -1719,8 +1721,32 @@ elif menu == "文書引用":
                     logger.exception("Failed to fetch citation papers")
                     st.warning("引用に使われた文献情報の一部を取得できませんでした。")
 
-            st.subheader(f"引用一覧 ({len(citations)}件)")
-            for citation in citations:
+            citation_keyword = st.text_input(
+                "引用文・文献を検索",
+                key=f"document_citation_search_{selected_document['id']}",
+            )
+            visible_citations = filter_document_citations(citations, paper_map, citation_keyword)
+            context_count = sum(1 for citation in citations if citation.get("context_text"))
+            missing_context_count = len(citations) - context_count
+            metric_col1, metric_col2, metric_col3 = st.columns(3)
+            metric_col1.metric("引用", len(citations))
+            metric_col2.metric("引用文あり", context_count)
+            metric_col3.metric("未同期", missing_context_count)
+
+            export_rows = build_document_citation_export_rows(visible_citations, paper_map)
+            if export_rows:
+                export_df = pd.DataFrame(export_rows)
+                st.download_button(
+                    "表示中の引用をCSV出力",
+                    data=export_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"{selected_document_title}_citations.csv",
+                    mime="text/csv",
+                )
+
+            st.subheader(f"引用一覧 ({len(visible_citations)}件)")
+            if not visible_citations:
+                st.write("検索条件に一致する引用はありません。")
+            for citation in visible_citations:
                 with st.container():
                     rendered_text = citation.get("rendered_text") or "引用"
                     context_text = citation.get("context_text") or ""
