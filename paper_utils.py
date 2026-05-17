@@ -726,13 +726,14 @@ def fetch_collection_counts(supabase, collection_ids):
 
 def fetch_paper_collection_ids(supabase, paper_id, item_id=None):
     collection_ids = set()
-    paper_result = (
-        supabase.table("collection_papers")
-        .select("collection_id")
-        .eq("paper_id", paper_id)
-        .execute()
-    )
-    collection_ids.update(row["collection_id"] for row in (paper_result.data or []))
+    if paper_id and not normalize_uuid_text(paper_id):
+        paper_result = (
+            supabase.table("collection_papers")
+            .select("collection_id")
+            .eq("paper_id", paper_id)
+            .execute()
+        )
+        collection_ids.update(row["collection_id"] for row in (paper_result.data or []))
 
     if item_id:
         try:
@@ -786,13 +787,14 @@ def set_paper_collections(supabase, paper_id, selected_collection_ids, item_id=N
     id_column = "item_id" if item_id else "paper_id"
     record_id = item_id or paper_id
     item_collection_table_missing = False
+    legacy_paper_id = paper_id if paper_id and not normalize_uuid_text(paper_id) else None
 
     for collection_id in sorted(current_ids - desired_ids):
-        if item_id:
+        if item_id and legacy_paper_id:
             (
                 supabase.table("collection_papers")
                 .delete()
-                .eq("paper_id", paper_id)
+                .eq("paper_id", legacy_paper_id)
                 .eq("collection_id", collection_id)
                 .execute()
             )
@@ -822,10 +824,17 @@ def set_paper_collections(supabase, paper_id, selected_collection_ids, item_id=N
         except APIError as error:
             if item_id and (is_missing_relation_error(error) or is_permission_error(error)):
                 item_collection_table_missing = True
+                if not legacy_paper_id:
+                    raise
                 try:
                     (
                         supabase.table("collection_papers")
-                        .insert({"paper_id": paper_id, "collection_id": collection_id})
+                        .insert(
+                            {
+                                "paper_id": legacy_paper_id,
+                                "collection_id": collection_id,
+                            }
+                        )
                         .execute()
                     )
                 except APIError as fallback_error:

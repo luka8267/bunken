@@ -1,6 +1,7 @@
 db_backups/
 __pycache__/
 *.py[cod]
+.streamlit/secrets.toml
 *.dump
 *.backup
 *.sql.gz
