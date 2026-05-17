@@ -5,8 +5,9 @@ a linked Word add-in.
 
 ## Current repositories
 
-- Web app: `C:\Users\run_r\OneDrive\ドキュメント\bunken`
-- Word add-in: `C:\Users\run_r\OneDrive\ドキュメント\word_addin\word_addin`
+- Web app: this repository root.
+- Word add-in: sibling `word_addin/word_addin` repository under the user's
+  OneDrive documents folder.
 
 ## Current architecture
 
