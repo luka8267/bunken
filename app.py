@@ -1486,8 +1486,7 @@ elif menu == "コレクション":
         collection_options = {
             (
                 f"{collection.get('name') or '無題'} "
-                f"({collection_counts.get(collection['id'], 0)}件) "
-                f"[{collection['id'][:8]}]"
+                f"({collection_counts.get(collection['id'], 0)}件)"
             ): collection
             for collection in collections
         }
@@ -1537,6 +1536,11 @@ elif menu == "コレクション":
                 supabase,
                 user_id,
                 selected_collection["id"],
+                columns=(
+                    "id, item_id, title, authors, journal, year, doi, url, volume, "
+                    "issue, pages, publisher, item_type, status, notes, pdf_path, "
+                    "supporting_path, display_order"
+                ),
             )
         except Exception:
             logger.exception("Failed to fetch collection papers")
@@ -1547,8 +1551,16 @@ elif menu == "コレクション":
         if not papers:
             st.write("このコレクションにはまだ文献がありません。一覧の編集欄から追加できます。")
         else:
+            tag_map = get_tag_map_for_papers(supabase, papers)
+            citation_usage_map = get_citation_usage_map_for_display(user_id, papers)
             for paper in papers:
-                st.write((paper["id"], paper["title"], paper.get("authors"), paper.get("year")))
+                with st.container():
+                    render_paper_summary(
+                        paper,
+                        tag_map=tag_map,
+                        citation_usage_map=citation_usage_map,
+                    )
+                    st.divider()
 
 
 elif menu == "重複確認":
