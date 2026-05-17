@@ -65,6 +65,7 @@ Run this before pushing app changes:
 
 ```powershell
 python -m py_compile app.py paper_utils.py auth_utils.py
+python -m unittest discover -s tests -v
 streamlit run app.py
 ```
 
