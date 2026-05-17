@@ -510,6 +510,37 @@ def build_missing_doi_candidates(papers):
     return candidates
 
 
+def has_missing_publication_metadata(paper):
+    return any(not paper.get(field) for field in ("volume", "issue", "pages", "publisher"))
+
+
+def build_existing_doi_metadata_candidates(papers):
+    candidates = []
+    for paper in papers:
+        doi = normalize_doi(paper.get("doi"))
+        if not doi or not clean_optional_id(paper.get("item_id")):
+            continue
+        if not has_missing_publication_metadata(paper):
+            continue
+        metadata = fetch_doi(doi)
+        if not metadata:
+            continue
+        candidate = {
+            "doi": doi,
+            "title": metadata[0],
+            "authors": metadata[1],
+            "journal": metadata[2],
+            "year": metadata[3],
+            "volume": metadata[4],
+            "issue": metadata[5],
+            "pages": metadata[6],
+            "publisher": metadata[7],
+        }
+        if any(candidate.get(field) and not paper.get(field) for field in ("volume", "issue", "pages", "publisher")):
+            candidates.append({"paper": paper, "candidate": candidate})
+    return candidates
+
+
 def fetch_url_metadata(url):
     normalized_url = normalize_url(url)
     if not normalized_url or not is_public_http_url(normalized_url):
@@ -924,6 +955,78 @@ elif menu == "一覧":
                 st.write("候補検索を実行してください。")
             else:
                 st.write("DOI未入力の文献はありません。")
+        doi_metadata_records = [
+            record
+            for record in records
+            if normalize_doi(record.get("doi"))
+            and clean_optional_id(record.get("item_id"))
+            and has_missing_publication_metadata(record)
+        ]
+        with st.expander(f"DOIメタデータ補完（不足: {len(doi_metadata_records)}件）"):
+            st.caption(
+                "既にDOIがある文献について、Crossrefから巻・号・ページ・出版社を取得します。"
+                "既に入力済みの値は上書きしません。"
+            )
+            if st.button("不足メタデータ候補を検索", key="preview_doi_metadata_candidates"):
+                with st.spinner("CrossrefでDOIメタデータを取得しています..."):
+                    st.session_state["doi_metadata_candidates"] = build_existing_doi_metadata_candidates(
+                        doi_metadata_records
+                    )
+
+            metadata_candidates = st.session_state.get("doi_metadata_candidates", [])
+            if metadata_candidates:
+                st.write(f"{len(metadata_candidates)}件の補完候補が見つかりました。")
+                for item in metadata_candidates:
+                    paper = item["paper"]
+                    candidate = item["candidate"]
+                    values = [
+                        f"{label}: {candidate.get(field)}"
+                        for label, field in (
+                            ("巻", "volume"),
+                            ("号", "issue"),
+                            ("ページ", "pages"),
+                            ("出版社", "publisher"),
+                        )
+                        if candidate.get(field) and not paper.get(field)
+                    ]
+                    st.write(f"- {paper.get('title') or '無題'} → " + " / ".join(values))
+
+                metadata_confirm = st.checkbox(
+                    "候補を確認しました。空欄の巻・号・ページ・出版社だけを補完します。",
+                    key="apply_doi_metadata_confirm",
+                )
+                if st.button("メタデータ候補を適用", key="apply_doi_metadata_candidates"):
+                    if not metadata_confirm:
+                        st.error("適用するには確認チェックを入れてください。")
+                    else:
+                        updated_count = 0
+                        for item in metadata_candidates:
+                            paper = item["paper"]
+                            candidate = item["candidate"]
+                            update_paper_details(
+                                supabase,
+                                user_id,
+                                paper["id"],
+                                paper.get("status") or "",
+                                paper.get("notes") or "",
+                                normalize_url(paper.get("url")) or None,
+                                item_id=clean_optional_id(paper.get("item_id")),
+                                doi=normalize_doi(paper.get("doi")),
+                                volume=paper.get("volume") or candidate.get("volume") or "",
+                                issue=paper.get("issue") or candidate.get("issue") or "",
+                                pages=paper.get("pages") or candidate.get("pages") or "",
+                                publisher=paper.get("publisher")
+                                or candidate.get("publisher")
+                                or "",
+                            )
+                            updated_count += 1
+                        st.session_state.pop("doi_metadata_candidates", None)
+                        st.success(f"DOIメタデータを補完しました: {updated_count}件")
+                        st.rerun()
+            elif doi_metadata_records:
+                st.write("候補検索を実行してください。")
+            else:
+                st.write("DOIメタデータが不足している正規化文献はありません。")
         try:
             collections_result = fetch_user_collections(supabase, user_id)
             collections = collections_result.data or []
