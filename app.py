@@ -34,6 +34,7 @@ from paper_utils import (
     delete_collection,
     delete_paper,
     delete_pdf_from_storage,
+    delete_user_document,
     export_to_word_bytes,
     fetch_collection_counts,
     fetch_document_citations,
@@ -1649,11 +1650,36 @@ elif menu == "文書引用":
         }
         selected_label = st.selectbox("文書", list(document_options.keys()))
         selected_document = document_options[selected_label]
+        selected_document_title = selected_document.get("title") or "無題"
 
-        st.write(f"文書ID: {selected_document.get('word_document_id')}")
+        st.write(f"文書名: {selected_document_title}")
         st.write(f"引用スタイル: {selected_document.get('citation_style')}")
         if selected_document.get("locale"):
             st.write(f"ロケール: {selected_document.get('locale')}")
+        if selected_document.get("updated_at"):
+            st.caption(f"最終同期: {selected_document['updated_at']}")
+
+        with st.expander("この同期文書を削除"):
+            st.caption(
+                "アプリ側に保存されたこのWord文書の同期記録と引用一覧を削除します。"
+                "Word本文やWordファイル自体は削除されません。"
+            )
+            confirm_title = st.text_input(
+                "削除するには文書名を入力",
+                key=f"delete_document_confirm_{selected_document['id']}",
+            )
+            if st.button(
+                "同期文書を削除",
+                key=f"delete_document_{selected_document['id']}",
+                disabled=confirm_title != selected_document_title,
+            ):
+                try:
+                    delete_user_document(supabase, user_id, selected_document["id"])
+                    st.success("同期文書を削除しました。")
+                    st.rerun()
+                except Exception as error:
+                    logger.exception("Failed to delete document")
+                    st.error(f"削除に失敗しました: {error}")
 
         try:
             citations_result = fetch_document_citations(supabase, selected_document["id"])
@@ -1666,26 +1692,64 @@ elif menu == "文書引用":
         if not citations:
             st.write("この文書には同期済みの引用がありません。")
         else:
+            citation_paper_ids = []
+            for citation in citations:
+                for item in citation.get("citation_items") or []:
+                    if isinstance(item, dict) and item.get("paperId"):
+                        citation_paper_ids.append(str(item["paperId"]))
+            citation_paper_ids = list(dict.fromkeys(citation_paper_ids))
+            paper_map = {}
+            if citation_paper_ids:
+                try:
+                    paper_result = fetch_user_papers_by_ids(
+                        supabase,
+                        user_id,
+                        citation_paper_ids,
+                        columns=(
+                            "id, item_id, title, authors, journal, year, doi, volume, "
+                            "issue, pages, publisher"
+                        ),
+                    )
+                    paper_map = {
+                        str(paper.get("id")): paper
+                        for paper in (paper_result.data or [])
+                        if paper.get("id")
+                    }
+                except Exception:
+                    logger.exception("Failed to fetch citation papers")
+                    st.warning("引用に使われた文献情報の一部を取得できませんでした。")
+
             st.subheader(f"引用一覧 ({len(citations)}件)")
             for citation in citations:
                 with st.container():
                     rendered_text = citation.get("rendered_text") or "引用"
-                    st.markdown(f"**{citation.get('sort_order')}. {rendered_text}**")
-                    if citation.get("word_control_id"):
-                        st.caption(f"Word control: {citation['word_control_id']}")
+                    sort_order = citation.get("sort_order") or "-"
+                    st.markdown(f"**{sort_order}. 引用に使った文: {rendered_text}**")
 
                     items = citation.get("citation_items") or []
                     if items:
                         for item in items:
-                            paper_id = item.get("paperId")
-                            locator = item.get("locator")
+                            if not isinstance(item, dict):
+                                continue
+                            paper = paper_map.get(str(item.get("paperId") or ""))
+                            if paper:
+                                details = [paper.get("title") or "無題"]
+                                if paper.get("authors"):
+                                    details.append(str(paper["authors"]))
+                                if paper.get("year"):
+                                    details.append(str(paper["year"]))
+                                if paper.get("journal"):
+                                    details.append(str(paper["journal"]))
+                            else:
+                                details = ["文献情報を取得できませんでした"]
+
                             reference_number = item.get("referenceNumber")
-                            details = [f"paper_id={paper_id}"]
+                            locator = item.get("locator")
                             if reference_number:
-                                details.append(f"ref={reference_number}")
+                                details.append(f"参考文献番号: {reference_number}")
                             if locator:
-                                details.append(f"locator={locator}")
-                            st.write("- " + ", ".join(details))
+                                details.append(f"位置: {locator}")
+                            st.write("- " + " / ".join(details))
                     else:
                         st.caption("文献アイテムなし")
 

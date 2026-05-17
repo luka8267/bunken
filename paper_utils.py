@@ -623,6 +623,22 @@ def fetch_document_citations(supabase, document_id):
     )
 
 
+def delete_user_document(supabase, user_id, document_id):
+    (
+        supabase.table("document_citations")
+        .delete()
+        .eq("document_id", document_id)
+        .execute()
+    )
+    return (
+        supabase.table("documents")
+        .delete()
+        .eq("id", document_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
 def replace_paper_id_in_document_citations(supabase, user_id, source_paper_id, target_paper_id):
     source_ids = source_paper_id if isinstance(source_paper_id, (list, tuple, set)) else [source_paper_id]
     source_texts = {str(source_id) for source_id in source_ids if source_id is not None}

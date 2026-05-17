@@ -3,6 +3,7 @@ import unittest
 from postgrest.exceptions import APIError
 
 from paper_utils import (
+    delete_user_document,
     fetch_collection_counts,
     fetch_paper_collection_ids,
     get_tag_map_for_papers,
@@ -29,6 +30,10 @@ class Query:
 
     def update(self, values):
         self.calls.append((self.table_name, "update", dict(values)))
+        return self
+
+    def delete(self):
+        self.calls.append((self.table_name, "delete"))
         return self
 
     def eq(self, column, value):
@@ -213,6 +218,27 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         )
 
         self.assertEqual(get_tag_map_for_papers(supabase, [{"id": "1"}]), {})
+
+    def test_delete_user_document_removes_citations_then_document(self):
+        supabase = FakeSupabase(
+            {
+                "document_citations": [{"document_id": "doc-1"}],
+                "documents": [{"id": "doc-1", "user_id": "u1"}],
+            }
+        )
+
+        delete_user_document(supabase, "u1", "doc-1")
+
+        self.assertEqual(
+            supabase.calls,
+            [
+                ("document_citations", "delete"),
+                ("document_citations", "eq", "document_id", "doc-1"),
+                ("documents", "delete"),
+                ("documents", "eq", "id", "doc-1"),
+                ("documents", "eq", "user_id", "u1"),
+            ],
+        )
 
 
 if __name__ == "__main__":
