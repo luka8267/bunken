@@ -1,6 +1,7 @@
 db_backups/
 __pycache__/
 node_modules/
+supabase/.temp/
 *.py[cod]
 .streamlit/secrets.toml
 *.dump

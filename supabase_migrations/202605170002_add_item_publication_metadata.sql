@@ -7,9 +7,7 @@ alter table public.items
     add column if not exists pages text,
     add column if not exists publisher text;
 
-drop view if exists public.paper_items_view;
-
-create view public.paper_items_view
+create or replace view public.paper_items_view
 with (security_invoker = true)
 as
 with creator_summary as (
@@ -62,12 +60,12 @@ select
     items.url,
     supporting_attachments.supporting_path,
     items.item_type,
+    items.created_at,
+    items.updated_at,
     items.volume,
     items.issue,
     items.pages,
-    items.publisher,
-    items.created_at,
-    items.updated_at
+    items.publisher
 from public.items
 left join creator_summary
   on creator_summary.item_id = items.id
