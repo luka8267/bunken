@@ -913,7 +913,16 @@ elif menu == "一覧":
     df = pd.DataFrame(result.data or [])
 
     sort_option = st.selectbox("並び替え", SORT_OPTIONS)
-    df = sort_papers_dataframe(df, sort_option)
+    added_oldest_first = st.session_state.get("list_added_oldest_first", False)
+    if sort_option == "追加順":
+        current_order_label = "古い順" if added_oldest_first else "新しい順"
+        if st.button(
+            f"追加順を切替（現在: {current_order_label}）",
+            key="toggle_list_added_order",
+        ):
+            st.session_state["list_added_oldest_first"] = not added_oldest_first
+            st.rerun()
+    df = sort_papers_dataframe(df, sort_option, added_oldest_first=added_oldest_first)
 
     st.header("📚 論文一覧")
 
@@ -1556,9 +1565,30 @@ elif menu == "コレクション":
             SORT_OPTIONS,
             key=f"collection_sort_{selected_collection['id']}",
         )
+        collection_added_oldest_key = (
+            f"collection_added_oldest_first_{selected_collection['id']}"
+        )
+        collection_added_oldest_first = st.session_state.get(
+            collection_added_oldest_key,
+            False,
+        )
+        if collection_sort == "追加順":
+            current_order_label = "古い順" if collection_added_oldest_first else "新しい順"
+            if st.button(
+                f"追加順を切替（現在: {current_order_label}）",
+                key=f"toggle_collection_added_order_{selected_collection['id']}",
+            ):
+                st.session_state[collection_added_oldest_key] = (
+                    not collection_added_oldest_first
+                )
+                st.rerun()
         visible_papers = filter_papers(papers, keyword=collection_keyword)
         if visible_papers:
-            visible_df = sort_papers_dataframe(pd.DataFrame(visible_papers), collection_sort)
+            visible_df = sort_papers_dataframe(
+                pd.DataFrame(visible_papers),
+                collection_sort,
+                added_oldest_first=collection_added_oldest_first,
+            )
             visible_papers = visible_df.to_dict(orient="records")
 
         st.subheader(f"{selected_label} ({len(visible_papers)} / {len(papers)}件)")

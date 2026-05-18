@@ -1482,13 +1482,18 @@ def merge_duplicate_item(supabase, user_id, keeper, duplicate):
     return {"citation_updates": citation_updates, "updated_fields": updated_fields}
 
 
-def sort_papers_dataframe(df, sort_option):
+def sort_papers_dataframe(df, sort_option, added_oldest_first=False):
     if df.empty:
         return df
 
     sorted_df = df.copy()
 
-    if sort_option == "年（新しい順）":
+    if sort_option == "追加順" and "display_order" in sorted_df.columns:
+        sorted_df = sorted_df.sort_values(
+            by="display_order",
+            ascending=added_oldest_first,
+        )
+    elif sort_option == "年（新しい順）":
         sorted_df = sorted_df.sort_values(by="year", ascending=False)
     elif sort_option == "年（古い順）":
         sorted_df = sorted_df.sort_values(by="year", ascending=True)

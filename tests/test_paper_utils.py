@@ -1,5 +1,6 @@
 import unittest
 
+import pandas as pd
 from postgrest.exceptions import APIError
 
 from paper_utils import (
@@ -11,6 +12,7 @@ from paper_utils import (
     get_document_citation_usage_map,
     get_tag_map_for_papers,
     make_word_citation,
+    sort_papers_dataframe,
     strip_metadata_columns,
     update_paper_details,
 )
@@ -102,6 +104,30 @@ class PaperUtilsCollectionTests(unittest.TestCase):
 
         self.assertIn("Journal, 12(3), 45-67", citation)
         self.assertIn("https://doi.org/10.1000/example", citation)
+
+    def test_added_order_defaults_to_newest_first(self):
+        df = pd.DataFrame(
+            [
+                {"id": "old", "display_order": 1},
+                {"id": "new", "display_order": 2},
+            ]
+        )
+
+        sorted_df = sort_papers_dataframe(df, "追加順")
+
+        self.assertEqual(sorted_df["id"].tolist(), ["new", "old"])
+
+    def test_added_order_can_show_oldest_first(self):
+        df = pd.DataFrame(
+            [
+                {"id": "old", "display_order": 1},
+                {"id": "new", "display_order": 2},
+            ]
+        )
+
+        sorted_df = sort_papers_dataframe(df, "追加順", added_oldest_first=True)
+
+        self.assertEqual(sorted_df["id"].tolist(), ["old", "new"])
 
     def test_update_legacy_paper_details_can_edit_doi(self):
         supabase = FakeSupabase({"papers": [{"id": "p1", "user_id": "u1"}]})
