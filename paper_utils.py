@@ -1,4 +1,5 @@
 import io
+import math
 import os
 import re
 import unicodedata
@@ -67,6 +68,37 @@ def is_permission_error(error):
         or "row-level security" in error_text
         or "violates row-level security" in error_text
     )
+
+
+def normalize_json_value(value):
+    if value is None:
+        return None
+    if value.__class__.__name__ in {"NAType", "NaTType"}:
+        return None
+    try:
+        if value != value:
+            return None
+    except Exception:
+        pass
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def normalize_optional_db_value(value):
+    value = normalize_json_value(value)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    return value
+
+
+def normalize_text_db_value(value):
+    value = normalize_json_value(value)
+    if value is None:
+        return ""
+    return str(value)
 
 
 def normalize_doi(doi):
@@ -1816,6 +1848,13 @@ def update_paper_details(
     pages=None,
     publisher=None,
 ):
+    doi_provided = doi is not None
+    url_provided = url is not None
+    status = normalize_text_db_value(status)
+    notes = normalize_text_db_value(notes)
+    doi = normalize_optional_db_value(doi) if doi_provided else None
+    url = normalize_optional_db_value(url) if url_provided else None
+
     if item_id:
         item_result = (
             supabase.table("items")
@@ -1828,9 +1867,9 @@ def update_paper_details(
         extra = (item_result.data or [{}])[0].get("extra") or {}
         extra["legacy_status"] = status
         fields = {"abstract_note": notes, "extra": extra}
-        if doi is not None:
-            fields["doi"] = doi or None
-        if url is not None:
+        if doi_provided:
+            fields["doi"] = doi
+        if url_provided:
             fields["url"] = url
         metadata_fields = {
             "volume": volume,
@@ -1840,7 +1879,7 @@ def update_paper_details(
         }
         for field, value in metadata_fields.items():
             if value is not None:
-                fields[field] = value or None
+                fields[field] = normalize_optional_db_value(value)
         try:
             (
                 supabase.table("items")
@@ -1864,9 +1903,9 @@ def update_paper_details(
         return
 
     fields = {"status": status, "notes": notes}
-    if doi is not None:
-        fields["doi"] = doi or None
-    if url is not None:
+    if doi_provided:
+        fields["doi"] = doi
+    if url_provided:
         fields["url"] = url
 
     (

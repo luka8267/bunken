@@ -141,6 +141,30 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         self.assertTrue(updates)
         self.assertIsNone(updates[0][2]["doi"])
 
+    def test_update_item_details_converts_nan_metadata_to_null(self):
+        supabase = FakeSupabase({"items": [{"id": "item-1", "user_id": "u1", "extra": {}}]})
+
+        update_paper_details(
+            supabase,
+            "u1",
+            "paper-1",
+            float("nan"),
+            float("nan"),
+            item_id="item-1",
+            doi=float("nan"),
+            volume=float("nan"),
+            issue="2",
+        )
+
+        updates = [call for call in supabase.calls if call[0] == "items" and call[1] == "update"]
+        self.assertTrue(updates)
+        fields = updates[0][2]
+        self.assertEqual(fields["abstract_note"], "")
+        self.assertEqual(fields["extra"]["legacy_status"], "")
+        self.assertIsNone(fields["doi"])
+        self.assertIsNone(fields["volume"])
+        self.assertEqual(fields["issue"], "2")
+
     def test_uuid_paper_id_uses_collection_items_only(self):
         supabase = FakeSupabase(
             {
