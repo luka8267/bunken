@@ -4,6 +4,7 @@
 
 - [Development plan](docs/DEVELOPMENT_PLAN.md)
 - [DB backup runbook](docs/DB_BACKUP_RUNBOOK.md)
+- [Deployment](docs/DEPLOYMENT.md)
 
 ## Password reset setup
 
