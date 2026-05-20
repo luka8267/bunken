@@ -1633,7 +1633,26 @@ elif menu == "詳細":
             )
 
             st.subheader("参考文献")
-            st.code(make_word_citation(selected_paper, style="APA"))
+            citation_style = st.segmented_control(
+                "引用スタイル",
+                ["APA", "Vancouver", "Nature"],
+                default="APA",
+                key=f"detail_citation_style_{selected_paper['id']}",
+            )
+            citation_text = make_word_citation(selected_paper, style=citation_style)
+            st.code(citation_text)
+            citation_file_name = re.sub(
+                r"[^A-Za-z0-9._-]+",
+                "-",
+                selected_paper.get("title") or "citation",
+            ).strip("-")
+            st.download_button(
+                "参考文献をダウンロード",
+                data=citation_text.encode("utf-8"),
+                file_name=f"{citation_file_name or 'citation'}-{citation_style}.txt",
+                mime="text/plain",
+                key=f"detail_citation_download_{selected_paper['id']}",
+            )
 
             st.subheader("編集")
             render_paper_edit_form(
