@@ -1467,6 +1467,27 @@ elif menu == "詳細":
             paper_ids = list(paper_by_id.keys())
             if st.session_state.get("detail_selected_paper_id") not in paper_by_id:
                 st.session_state["detail_selected_paper_id"] = paper_ids[0]
+            current_index = paper_ids.index(st.session_state["detail_selected_paper_id"])
+
+            nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 1, 2])
+            with nav_col1:
+                if st.button("← 前へ", disabled=current_index == 0, key="detail_prev"):
+                    st.session_state["detail_selected_paper_id"] = paper_ids[current_index - 1]
+                    st.rerun()
+            with nav_col2:
+                if st.button(
+                    "次へ →",
+                    disabled=current_index >= len(paper_ids) - 1,
+                    key="detail_next",
+                ):
+                    st.session_state["detail_selected_paper_id"] = paper_ids[current_index + 1]
+                    st.rerun()
+            with nav_col3:
+                st.caption(f"{current_index + 1} / {len(paper_ids)}")
+            with nav_col4:
+                if st.button("一覧へ戻る", key="detail_back_to_list"):
+                    st.session_state["active_menu"] = "一覧"
+                    st.rerun()
 
             def format_detail_option(paper_id):
                 paper = paper_by_id[paper_id]
