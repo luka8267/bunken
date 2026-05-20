@@ -1457,8 +1457,60 @@ elif menu == "詳細":
     if not papers:
         st.write("文献がありません。")
     else:
+        try:
+            collections_result = fetch_user_collections(supabase, user_id)
+            collections = collections_result.data or []
+        except Exception:
+            logger.exception("Failed to fetch collections")
+            collections = []
+        collection_label_by_id, collection_id_by_label = build_collection_label_maps(collections)
+
         keyword = st.text_input("タイトル・著者・DOIで絞り込み", key="detail_keyword").strip()
-        filtered_papers = filter_papers(papers, keyword=keyword) if keyword else papers
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        with filter_col1:
+            status_filter = st.selectbox(
+                "ステータス",
+                [""] + READING_STATUSES,
+                key="detail_status_filter",
+            )
+        with filter_col2:
+            attachment_filter = st.selectbox(
+                "添付",
+                ["", "PDFあり", "補足資料あり", "添付あり", "添付なし"],
+                key="detail_attachment_filter",
+            )
+        with filter_col3:
+            selected_collection_label = st.selectbox(
+                "コレクション",
+                ["すべて"] + list(collection_id_by_label.keys()),
+                key="detail_collection_filter",
+            )
+
+        scoped_papers = papers
+        if selected_collection_label != "すべて":
+            selected_collection_id = collection_id_by_label[selected_collection_label]
+            try:
+                scoped_papers = fetch_papers_for_collection(
+                    supabase,
+                    user_id,
+                    selected_collection_id,
+                    columns=(
+                        "id, item_id, title, authors, journal, year, doi, url, volume, issue, "
+                        "pages, publisher, item_type, status, notes, pdf_path, "
+                        "supporting_path, display_order"
+                    ),
+                )
+            except Exception:
+                logger.exception("Failed to fetch papers for selected collection")
+                st.warning("コレクション内の文献取得に失敗しました。全件から絞り込みます。")
+                scoped_papers = papers
+
+        filtered_papers = filter_papers(
+            scoped_papers,
+            keyword=keyword,
+            status=status_filter,
+            attachment_filter=attachment_filter,
+        )
 
         if not filtered_papers:
             st.write("検索条件に一致する文献はありません。")
@@ -1505,14 +1557,6 @@ elif menu == "詳細":
                 key="detail_selected_paper_id",
             )
             selected_paper = paper_by_id[selected_paper_id]
-
-            try:
-                collections_result = fetch_user_collections(supabase, user_id)
-                collections = collections_result.data or []
-            except Exception:
-                logger.exception("Failed to fetch collections")
-                collections = []
-            collection_label_by_id, collection_id_by_label = build_collection_label_maps(collections)
 
             tag_map = get_tag_map_for_papers(supabase, [selected_paper])
             citation_usage_map = get_citation_usage_map_for_display(user_id, [selected_paper])
