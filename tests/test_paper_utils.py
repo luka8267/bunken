@@ -16,6 +16,8 @@ from paper_utils import (
     make_bibtex_entry,
     make_ris_entry,
     make_word_citation,
+    parse_bibtex_entries,
+    parse_ris_entries,
     replace_tags_for_paper,
     sort_papers_dataframe,
     strip_metadata_columns,
@@ -186,6 +188,41 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         self.assertIn("\n\n@article", bibtex_text)
         self.assertEqual(ris_text.count("TY  - JOUR"), 2)
         self.assertIn("\n\nTY  - JOUR", ris_text)
+
+    def test_parse_bibtex_entries(self):
+        entries = parse_bibtex_entries(
+            """
+@article{alpha2026,
+  title = {Metadata Test},
+  author = {Alpha and Beta},
+  journal = {Journal},
+  year = {2026},
+  doi = {https://doi.org/10.1000/example}
+}
+"""
+        )
+
+        self.assertEqual(entries[0]["title"], "Metadata Test")
+        self.assertEqual(entries[0]["authors"], "Alpha, Beta")
+        self.assertEqual(entries[0]["doi"], "10.1000/example")
+
+    def test_parse_ris_entries(self):
+        entries = parse_ris_entries(
+            """
+TY  - JOUR
+AU  - Alpha
+AU  - Beta
+TI  - Metadata Test
+T2  - Journal
+PY  - 2026
+DO  - https://doi.org/10.1000/example
+ER  -
+"""
+        )
+
+        self.assertEqual(entries[0]["title"], "Metadata Test")
+        self.assertEqual(entries[0]["authors"], "Alpha, Beta")
+        self.assertEqual(entries[0]["doi"], "10.1000/example")
 
     def test_added_order_defaults_to_newest_first(self):
         df = pd.DataFrame(

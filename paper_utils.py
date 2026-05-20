@@ -8,6 +8,11 @@ import uuid
 from docx import Document
 
 try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
+
+try:
     from postgrest.exceptions import APIError
 except ImportError:
     APIError = Exception
@@ -17,6 +22,7 @@ PAPER_ITEMS_VIEW = "paper_items_view"
 ITEM_METADATA_COLUMNS = ("volume", "issue", "pages", "publisher", "item_type")
 SAFE_STORAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 SAFE_STORAGE_EXT_RE = re.compile(r"[^A-Za-z0-9]")
+DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.IGNORECASE)
 MAX_STORAGE_BASENAME_LENGTH = 80
 READING_STATUSES = ["未読", "読書中", "読了", "再読したい", "引用予定"]
 SORT_OPTIONS = ["追加順", "年（新しい順）", "年（古い順）", "タイトル", "ステータス"]
@@ -103,6 +109,13 @@ def normalize_text_db_value(value):
 
 def normalize_doi(doi):
     return (doi or "").strip()
+
+
+def extract_doi_from_text(text):
+    match = DOI_RE.search(text or "")
+    if not match:
+        return ""
+    return match.group(0).rstrip(").,;]")
 
 
 def normalize_title_for_match(title):
@@ -1622,6 +1635,110 @@ def export_to_bibtex_text(papers):
 
 def export_to_ris_text(papers):
     return "\n\n".join(make_ris_entry(paper) for paper in papers or [])
+
+
+def parse_bibtex_entries(text):
+    entries = []
+    for match in re.finditer(r"@\w+\s*\{\s*[^,]+,(.*?)(?=\n\s*@|\Z)", text or "", re.DOTALL):
+        body = match.group(1)
+        fields = {}
+        for field_match in re.finditer(
+            r"(\w+)\s*=\s*(?:\{(.*?)\}|\"(.*?)\")\s*,?",
+            body,
+            re.DOTALL,
+        ):
+            name = field_match.group(1).lower()
+            value = field_match.group(2) if field_match.group(2) is not None else field_match.group(3)
+            fields[name] = re.sub(r"\s+", " ", value or "").strip()
+        if fields:
+            entries.append(
+                {
+                    "title": fields.get("title", ""),
+                    "authors": ", ".join(normalize_bibtex_authors(fields.get("author", ""))),
+                    "journal": fields.get("journal") or fields.get("booktitle", ""),
+                    "year": fields.get("year") or 0,
+                    "doi": normalize_bibtex_doi(fields.get("doi", "")),
+                    "url": fields.get("url", ""),
+                    "volume": fields.get("volume", ""),
+                    "issue": fields.get("number", ""),
+                    "pages": fields.get("pages", ""),
+                    "publisher": fields.get("publisher", ""),
+                }
+            )
+    return entries
+
+
+def parse_ris_entries(text):
+    entries = []
+    current = {}
+    authors = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        line_match = re.match(r"^([A-Z0-9]{2})\s+-\s*(.*)$", line, flags=re.IGNORECASE)
+        if not line_match:
+            continue
+        tag = line_match.group(1).strip().upper()
+        value = line_match.group(2).strip()
+        if tag == "TY":
+            current = {}
+            authors = []
+        elif tag == "AU":
+            authors.append(value)
+        elif tag in {"TI", "T1"}:
+            current["title"] = value
+        elif tag in {"T2", "JO", "JF"}:
+            current["journal"] = value
+        elif tag in {"PY", "Y1"}:
+            year_match = re.search(r"\d{4}", value)
+            current["year"] = year_match.group(0) if year_match else value
+        elif tag == "VL":
+            current["volume"] = value
+        elif tag == "IS":
+            current["issue"] = value
+        elif tag in {"SP", "EP"}:
+            current["pages"] = (
+                f"{current.get('pages', '')}-{value}".strip("-")
+                if tag == "EP"
+                else value
+            )
+        elif tag == "PB":
+            current["publisher"] = value
+        elif tag == "DO":
+            current["doi"] = normalize_bibtex_doi(value)
+        elif tag == "UR":
+            current["url"] = value
+        elif tag == "ER":
+            current["authors"] = ", ".join(authors)
+            entries.append(
+                {
+                    "title": current.get("title", ""),
+                    "authors": current.get("authors", ""),
+                    "journal": current.get("journal", ""),
+                    "year": current.get("year") or 0,
+                    "doi": current.get("doi", ""),
+                    "url": current.get("url", ""),
+                    "volume": current.get("volume", ""),
+                    "issue": current.get("issue", ""),
+                    "pages": current.get("pages", ""),
+                    "publisher": current.get("publisher", ""),
+                }
+            )
+            current = {}
+            authors = []
+    return [entry for entry in entries if entry.get("title") or entry.get("doi")]
+
+
+def extract_doi_from_pdf_bytes(pdf_bytes):
+    if PdfReader is None:
+        return ""
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        text_parts = []
+        for page in reader.pages[:3]:
+            text_parts.append(page.extract_text() or "")
+        return extract_doi_from_text(" ".join(text_parts))
+    except Exception:
+        return ""
 
 
 def export_to_word_bytes(papers):

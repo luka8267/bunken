@@ -39,6 +39,7 @@ from paper_utils import (
     export_to_bibtex_text,
     export_to_ris_text,
     export_to_word_bytes,
+    extract_doi_from_pdf_bytes,
     fetch_collection_counts,
     fetch_document_citations,
     fetch_paper_collection_ids,
@@ -62,6 +63,8 @@ from paper_utils import (
     normalize_doi,
     normalize_title_for_match,
     paper_has_document_citation_refs,
+    parse_bibtex_entries,
+    parse_ris_entries,
     replace_tags_for_paper,
     save_tags_for_paper,
     save_tags_for_item,
@@ -849,6 +852,130 @@ def build_existing_doi_metadata_candidates(papers):
     return candidates
 
 
+def normalize_import_year(value):
+    text = str(value or "").strip()
+    match = re.search(r"\d{4}", text)
+    return int(match.group(0)) if match else 0
+
+
+def normalize_import_candidate(candidate):
+    return {
+        "title": candidate.get("title") or "",
+        "authors": candidate.get("authors") or "",
+        "journal": candidate.get("journal") or "",
+        "year": normalize_import_year(candidate.get("year")),
+        "doi": normalize_doi(candidate.get("doi")),
+        "url": normalize_url(candidate.get("url")) or "",
+        "volume": candidate.get("volume") or "",
+        "issue": candidate.get("issue") or "",
+        "pages": candidate.get("pages") or "",
+        "publisher": candidate.get("publisher") or "",
+    }
+
+
+def find_import_duplicate(candidate, existing_records):
+    candidate_doi = normalize_doi(candidate.get("doi")).casefold()
+    candidate_title = normalize_title_for_match(candidate.get("title"))
+    candidate_year = normalize_import_year(candidate.get("year"))
+    for record in existing_records:
+        record_doi = normalize_doi(record.get("doi")).casefold()
+        if candidate_doi and record_doi == candidate_doi:
+            return f"DOI一致: {record.get('title') or '無題'}"
+        if (
+            candidate_title
+            and candidate_title == normalize_title_for_match(record.get("title"))
+            and candidate_year
+            and candidate_year == normalize_import_year(record.get("year"))
+        ):
+            return f"タイトル+年一致: {record.get('title') or '無題'}"
+    return ""
+
+
+def create_imported_paper(candidate, user_id, tags_text="", pdf_file=None):
+    normalized = normalize_import_candidate(candidate)
+    pdf_path = upload_pdf_to_storage(supabase, pdf_file, user_id) if pdf_file else None
+    next_order = get_next_display_order(supabase, user_id)
+    created_paper = create_user_paper(
+        supabase,
+        user_id,
+        normalized["title"],
+        normalized["authors"],
+        normalized["journal"],
+        normalized["year"],
+        normalized["doi"],
+        normalized["url"],
+        pdf_path,
+        None,
+        "未読",
+        "",
+        next_order,
+        normalized["volume"],
+        normalized["issue"],
+        normalized["pages"],
+        normalized["publisher"],
+    )
+    if tags_text:
+        if created_paper.get("item_id"):
+            save_tags_for_item(supabase, user_id, created_paper["item_id"], tags_text)
+        else:
+            save_tags_for_paper(supabase, user_id, created_paper["id"], tags_text)
+    return created_paper
+
+
+def render_import_candidates(candidates, existing_records, key_prefix, pdf_files=None):
+    normalized_candidates = [normalize_import_candidate(candidate) for candidate in candidates]
+    if not normalized_candidates:
+        st.write("インポート候補はありません。")
+        return
+
+    duplicate_notes = [
+        find_import_duplicate(candidate, existing_records)
+        for candidate in normalized_candidates
+    ]
+    preview_rows = []
+    for index, candidate in enumerate(normalized_candidates, start=1):
+        preview_rows.append(
+            {
+                "番号": index,
+                "タイトル": candidate["title"],
+                "著者": candidate["authors"],
+                "年": candidate["year"],
+                "DOI": candidate["doi"],
+                "重複候補": duplicate_notes[index - 1],
+            }
+        )
+    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
+
+    import_tags = st.text_input(
+        "インポート時に追加するタグ（任意・カンマ区切り）",
+        key=f"{key_prefix}_tags",
+    )
+    skip_duplicates = st.checkbox(
+        "重複候補をスキップ",
+        value=True,
+        key=f"{key_prefix}_skip_duplicates",
+    )
+    if st.button("候補をインポート", key=f"{key_prefix}_apply"):
+        imported_count = 0
+        skipped_count = 0
+        for index, candidate in enumerate(normalized_candidates):
+            if skip_duplicates and duplicate_notes[index]:
+                skipped_count += 1
+                continue
+            if not candidate["title"] and not candidate["doi"]:
+                skipped_count += 1
+                continue
+            create_imported_paper(
+                candidate,
+                get_current_user_id(),
+                tags_text=import_tags,
+                pdf_file=(pdf_files[index] if pdf_files and index < len(pdf_files) else None),
+            )
+            imported_count += 1
+        st.success(f"インポートしました: {imported_count}件 / スキップ {skipped_count}件")
+        st.rerun()
+
+
 def fetch_url_metadata(url):
     normalized_url = normalize_url(url)
     if not normalized_url or not is_public_http_url(normalized_url):
@@ -1004,7 +1131,7 @@ st.title("📚 文献管理アプリ")
 post_action_warning = st.session_state.pop("post_action_warning", None)
 if post_action_warning:
     st.warning(post_action_warning)
-MENU_OPTIONS = ["追加", "検索", "一覧", "詳細", "タグ検索", "コレクション", "重複確認", "文書引用"]
+MENU_OPTIONS = ["追加", "検索", "一覧", "詳細", "インポート", "タグ検索", "コレクション", "重複確認", "文書引用"]
 if st.session_state.get("active_menu") not in MENU_OPTIONS:
     st.session_state["active_menu"] = "追加"
 menu = st.sidebar.selectbox(
@@ -1179,7 +1306,7 @@ elif menu == "一覧":
 
     with st.expander("絞り込み", expanded=True):
         keyword = st.text_input("タイトル・著者・DOI・メモで絞り込み", key="list_keyword").strip()
-        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
         with filter_col1:
             status_filter = st.selectbox(
                 "ステータス",
@@ -1197,6 +1324,12 @@ elif menu == "一覧":
                 "コレクション",
                 ["すべて"] + list(collection_id_by_label.keys()),
                 key="list_collection_filter",
+            )
+        with filter_col4:
+            smart_filter = st.selectbox(
+                "スマート",
+                ["", "DOIなし", "PDFなし", "未読"],
+                key="list_smart_filter",
             )
 
         scoped_records = all_records
@@ -1240,6 +1373,18 @@ elif menu == "一覧":
             record
             for record in filtered_records
             if selected_tag in get_paper_tag_list(scoped_tag_map, record)
+        ]
+    if smart_filter == "DOIなし":
+        filtered_records = [
+            record for record in filtered_records if not normalize_doi(record.get("doi"))
+        ]
+    elif smart_filter == "PDFなし":
+        filtered_records = [
+            record for record in filtered_records if not record.get("pdf_path")
+        ]
+    elif smart_filter == "未読":
+        filtered_records = [
+            record for record in filtered_records if (record.get("status") or "") == "未読"
         ]
     df = pd.DataFrame(filtered_records)
 
@@ -1296,6 +1441,138 @@ elif menu == "一覧":
         records = df.to_dict(orient="records")
         tag_map = get_tag_map_for_papers(supabase, records)
         citation_usage_map = get_citation_usage_map_for_display(user_id, records)
+        bulk_options = {
+            f"[{record.get('ref_no')}] {record.get('title') or '無題'} ({record.get('year') or '-'})": record
+            for record in records
+        }
+        with st.expander("一括操作"):
+            selected_bulk_labels = st.multiselect(
+                "対象文献",
+                list(bulk_options.keys()),
+                key="list_bulk_selection",
+            )
+            selected_bulk_records = [bulk_options[label] for label in selected_bulk_labels]
+            st.caption(f"{len(selected_bulk_records)}件を選択中")
+
+            bulk_tab1, bulk_tab2, bulk_tab3, bulk_tab4 = st.tabs(
+                ["タグ", "コレクション", "ステータス", "エクスポート"]
+            )
+            with bulk_tab1:
+                bulk_tags = st.text_input(
+                    "追加するタグ（カンマ区切り）",
+                    key="list_bulk_tags",
+                )
+                if st.button("選択文献にタグ追加", key="apply_bulk_tags"):
+                    if not selected_bulk_records:
+                        st.error("対象文献を選択してください。")
+                    else:
+                        for record in selected_bulk_records:
+                            item_id = clean_optional_id(record.get("item_id"))
+                            if item_id:
+                                save_tags_for_item(supabase, user_id, item_id, bulk_tags)
+                            else:
+                                save_tags_for_paper(supabase, user_id, record["id"], bulk_tags)
+                        st.success(f"{len(selected_bulk_records)}件にタグを追加しました。")
+                        st.rerun()
+
+            with bulk_tab2:
+                bulk_collection_labels = st.multiselect(
+                    "追加先コレクション",
+                    list(collection_id_by_label.keys()),
+                    key="list_bulk_collections",
+                )
+                if st.button("選択文献をコレクションに追加", key="apply_bulk_collections"):
+                    if not selected_bulk_records:
+                        st.error("対象文献を選択してください。")
+                    elif not bulk_collection_labels:
+                        st.error("追加先コレクションを選択してください。")
+                    else:
+                        collection_ids_to_add = {
+                            collection_id_by_label[label]
+                            for label in bulk_collection_labels
+                        }
+                        for record in selected_bulk_records:
+                            item_id = clean_optional_id(record.get("item_id"))
+                            current_ids = set(
+                                fetch_paper_collection_ids(
+                                    supabase,
+                                    record["id"],
+                                    item_id,
+                                )
+                            )
+                            set_paper_collections(
+                                supabase,
+                                record["id"],
+                                sorted(current_ids | collection_ids_to_add),
+                                item_id=item_id,
+                            )
+                        st.success(f"{len(selected_bulk_records)}件をコレクションに追加しました。")
+                        st.rerun()
+
+            with bulk_tab3:
+                bulk_status = st.selectbox(
+                    "変更後ステータス",
+                    READING_STATUSES,
+                    key="list_bulk_status",
+                )
+                if st.button("選択文献のステータス変更", key="apply_bulk_status"):
+                    if not selected_bulk_records:
+                        st.error("対象文献を選択してください。")
+                    else:
+                        for record in selected_bulk_records:
+                            update_paper_details(
+                                supabase,
+                                user_id,
+                                record["id"],
+                                bulk_status,
+                                record.get("notes") or "",
+                                normalize_url(record.get("url")) or None,
+                                item_id=clean_optional_id(record.get("item_id")),
+                                doi=normalize_doi(record.get("doi")),
+                                volume=record.get("volume") or "",
+                                issue=record.get("issue") or "",
+                                pages=record.get("pages") or "",
+                                publisher=record.get("publisher") or "",
+                            )
+                        st.success(f"{len(selected_bulk_records)}件のステータスを変更しました。")
+                        st.rerun()
+
+            with bulk_tab4:
+                if selected_bulk_records:
+                    export_targets = selected_bulk_records
+                    export_suffix = "selected"
+                else:
+                    export_targets = records
+                    export_suffix = "filtered"
+                    st.caption("未選択の場合は、現在表示中の全件を出力します。")
+                export_col1, export_col2, export_col3 = st.columns(3)
+                with export_col1:
+                    st.download_button(
+                        "Word",
+                        data=export_to_word_bytes(export_targets),
+                        file_name=f"references-{export_suffix}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="bulk_export_word",
+                        use_container_width=True,
+                    )
+                with export_col2:
+                    st.download_button(
+                        "BibTeX",
+                        data=export_to_bibtex_text(export_targets).encode("utf-8"),
+                        file_name=f"references-{export_suffix}.bib",
+                        mime="application/x-bibtex",
+                        key="bulk_export_bibtex",
+                        use_container_width=True,
+                    )
+                with export_col3:
+                    st.download_button(
+                        "RIS",
+                        data=export_to_ris_text(export_targets).encode("utf-8"),
+                        file_name=f"references-{export_suffix}.ris",
+                        mime="application/x-research-info-systems",
+                        key="bulk_export_ris",
+                        use_container_width=True,
+                    )
         missing_doi_records = [
             record for record in records if not normalize_doi(record.get("doi"))
         ]
@@ -1789,6 +2066,140 @@ elif menu == "詳細":
                     collection_id_by_label=collection_id_by_label,
                     key_prefix="detail",
                 )
+
+
+elif menu == "インポート":
+    user_id = get_current_user_id()
+    st.header("インポート")
+    existing_result = fetch_user_papers(
+        supabase,
+        user_id,
+        columns="id, item_id, title, year, doi",
+    )
+    existing_records = existing_result.data or []
+
+    import_tab1, import_tab2, import_tab3, import_tab4 = st.tabs(
+        ["BibTeX", "RIS", "DOIリスト", "PDF"]
+    )
+    with import_tab1:
+        bibtex_file = st.file_uploader(
+            "BibTeXファイル",
+            type=["bib", "txt"],
+            key="import_bibtex_file",
+        )
+        bibtex_text = st.text_area(
+            "またはBibTeXを貼り付け",
+            height=180,
+            key="import_bibtex_text",
+        )
+        source_text = bibtex_text
+        if bibtex_file:
+            source_text = bibtex_file.getvalue().decode("utf-8", errors="ignore")
+        bibtex_candidates = parse_bibtex_entries(source_text)
+        render_import_candidates(
+            bibtex_candidates,
+            existing_records,
+            key_prefix="import_bibtex",
+        )
+
+    with import_tab2:
+        ris_file = st.file_uploader(
+            "RISファイル",
+            type=["ris", "txt"],
+            key="import_ris_file",
+        )
+        ris_text_input = st.text_area(
+            "またはRISを貼り付け",
+            height=180,
+            key="import_ris_text",
+        )
+        source_text = ris_text_input
+        if ris_file:
+            source_text = ris_file.getvalue().decode("utf-8", errors="ignore")
+        ris_candidates = parse_ris_entries(source_text)
+        render_import_candidates(
+            ris_candidates,
+            existing_records,
+            key_prefix="import_ris",
+        )
+
+    with import_tab3:
+        doi_text = st.text_area(
+            "DOIを1行に1件ずつ入力",
+            height=180,
+            key="import_doi_text",
+        )
+        doi_values = [
+            extract_doi(line) or normalize_doi(line)
+            for line in doi_text.splitlines()
+            if (extract_doi(line) or normalize_doi(line))
+        ]
+        doi_candidates = []
+        if doi_values:
+            with st.spinner("Crossrefからメタデータを取得しています..."):
+                for doi in doi_values:
+                    metadata = fetch_doi(doi)
+                    if metadata:
+                        doi_candidates.append(
+                            {
+                                "title": metadata[0],
+                                "authors": metadata[1],
+                                "journal": metadata[2],
+                                "year": metadata[3],
+                                "volume": metadata[4],
+                                "issue": metadata[5],
+                                "pages": metadata[6],
+                                "publisher": metadata[7],
+                                "doi": doi,
+                            }
+                        )
+                    else:
+                        doi_candidates.append({"doi": doi})
+        render_import_candidates(
+            doi_candidates,
+            existing_records,
+            key_prefix="import_doi",
+        )
+
+    with import_tab4:
+        pdf_files = st.file_uploader(
+            "PDFファイル",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="import_pdf_files",
+        )
+        pdf_candidates = []
+        if pdf_files:
+            with st.spinner("PDFからDOIを抽出し、Crossrefでメタデータを取得しています..."):
+                for pdf_file in pdf_files:
+                    pdf_bytes = pdf_file.getvalue()
+                    doi = extract_doi_from_pdf_bytes(pdf_bytes)
+                    if doi:
+                        metadata = fetch_doi(doi)
+                        if metadata:
+                            pdf_candidates.append(
+                                {
+                                    "title": metadata[0],
+                                    "authors": metadata[1],
+                                    "journal": metadata[2],
+                                    "year": metadata[3],
+                                    "volume": metadata[4],
+                                    "issue": metadata[5],
+                                    "pages": metadata[6],
+                                    "publisher": metadata[7],
+                                    "doi": doi,
+                                }
+                            )
+                        else:
+                            pdf_candidates.append({"title": pdf_file.name, "doi": doi})
+                    else:
+                        pdf_candidates.append({"title": pdf_file.name})
+        render_import_candidates(
+            pdf_candidates,
+            existing_records,
+            key_prefix="import_pdf",
+            pdf_files=pdf_files,
+        )
 
 
 elif menu == "タグ検索":
