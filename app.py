@@ -58,6 +58,7 @@ from paper_utils import (
     normalize_doi,
     normalize_title_for_match,
     paper_has_document_citation_refs,
+    replace_tags_for_paper,
     save_tags_for_paper,
     save_tags_for_item,
     search_user_papers,
@@ -578,6 +579,30 @@ def render_paper_edit_form(
         except Exception:
             logger.exception("Failed to update paper")
             st.error("更新に失敗しました。入力内容とログを確認してください。")
+
+
+def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
+    row_dict = dict(paper)
+    current_tags = ", ".join(get_paper_tag_list(tag_map, row_dict))
+    tags_text = st.text_input(
+        "タグ（カンマ区切り）",
+        value=current_tags,
+        key=f"{key_prefix}_tags_{row_dict['id']}",
+    )
+    if st.button("タグを保存", key=f"{key_prefix}_save_tags_{row_dict['id']}"):
+        try:
+            replace_tags_for_paper(
+                supabase,
+                user_id,
+                row_dict["id"],
+                clean_optional_id(row_dict.get("item_id")),
+                tags_text,
+            )
+            st.success("タグを更新しました")
+            st.rerun()
+        except Exception:
+            logger.exception("Failed to update paper tags")
+            st.error("タグの更新に失敗しました。入力内容とログを確認してください。")
 
 
 def format_duplicate_option_label(paper):
@@ -1565,6 +1590,14 @@ elif menu == "詳細":
                 selected_paper,
                 tag_map=tag_map,
                 citation_usage_map=citation_usage_map,
+            )
+
+            st.subheader("タグ")
+            render_paper_tag_editor(
+                selected_paper,
+                user_id,
+                tag_map,
+                key_prefix="detail",
             )
 
             st.subheader("参考文献")

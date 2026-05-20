@@ -12,6 +12,7 @@ from paper_utils import (
     get_document_citation_usage_map,
     get_tag_map_for_papers,
     make_word_citation,
+    replace_tags_for_paper,
     sort_papers_dataframe,
     strip_metadata_columns,
     update_paper_details,
@@ -35,6 +36,16 @@ class Query:
 
     def update(self, values):
         self.calls.append((self.table_name, "update", dict(values)))
+        return self
+
+    def insert(self, values):
+        self.calls.append((self.table_name, "insert", dict(values)))
+        self.rows.append(dict(values))
+        return self
+
+    def upsert(self, values):
+        self.calls.append((self.table_name, "upsert", dict(values)))
+        self.rows.append(dict(values))
         return self
 
     def delete(self):
@@ -259,6 +270,32 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         )
 
         self.assertEqual(get_tag_map_for_papers(supabase, [{"item_id": "item-1"}]), {})
+
+    def test_replace_tags_for_item_clears_old_links_and_upserts_new_tags(self):
+        supabase = FakeSupabase(
+            {
+                "paper_tags": [{"paper_id": "legacy-1", "tag_id": "old-paper-tag"}],
+                "item_tags": [{"item_id": "item-1", "tag_id": "old-item-tag"}],
+                "tags": [{"id": "tag-1", "name": "重要", "user_id": "user-1"}],
+            }
+        )
+
+        replace_tags_for_paper(
+            supabase,
+            "user-1",
+            "legacy-1",
+            "item-1",
+            "重要",
+        )
+
+        self.assertIn(("paper_tags", "delete"), supabase.calls)
+        self.assertIn(("paper_tags", "eq", "paper_id", "legacy-1"), supabase.calls)
+        self.assertIn(("item_tags", "delete"), supabase.calls)
+        self.assertIn(("item_tags", "eq", "item_id", "item-1"), supabase.calls)
+        self.assertIn(
+            ("item_tags", "upsert", {"item_id": "item-1", "tag_id": "tag-1"}),
+            supabase.calls,
+        )
 
     def test_tag_api_error_keeps_list_rendering(self):
         supabase = FakeSupabase(

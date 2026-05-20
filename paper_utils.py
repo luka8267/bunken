@@ -1653,6 +1653,22 @@ def save_tags_for_item(supabase, user_id, item_id, tags_text):
         ).execute()
 
 
+def replace_tags_for_paper(supabase, user_id, paper_id, item_id, tags_text):
+    legacy_paper_id = paper_id if paper_id and not normalize_uuid_text(paper_id) else None
+    if legacy_paper_id:
+        supabase.table("paper_tags").delete().eq("paper_id", legacy_paper_id).execute()
+
+    if item_id:
+        try:
+            supabase.table("item_tags").delete().eq("item_id", item_id).execute()
+        except APIError as error:
+            if not is_missing_relation_error(error):
+                raise
+        save_tags_for_item(supabase, user_id, item_id, tags_text)
+    elif paper_id:
+        save_tags_for_paper(supabase, user_id, paper_id, tags_text)
+
+
 def get_tag_map_for_papers(supabase, papers_or_ids):
     if not papers_or_ids:
         return {}
