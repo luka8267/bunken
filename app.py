@@ -1,3 +1,5 @@
+import base64
+import html as html_lib
 import ipaddress
 import logging
 import re
@@ -615,7 +617,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
     with col1:
         st.link_button("PDFを開く", signed_url)
     with col2:
-        st.caption("プレビューURLは一時的な署名付きURLです。")
+        st.caption("プレビューが表示できない場合は、PDFを開くボタンを使ってください。")
 
     with st.expander("PDFプレビュー", expanded=True):
         preview_height = st.slider(
@@ -626,7 +628,30 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
             step=50,
             key=f"{key_prefix}_pdf_preview_height_{paper['id']}",
         )
-        components.iframe(signed_url, height=preview_height, scrolling=True)
+        try:
+            response = requests.get(signed_url, timeout=20)
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.exception("Failed to fetch PDF for preview")
+            st.warning("PDFプレビューを読み込めませんでした。PDFを開くボタンから確認してください。")
+            return
+
+        if len(response.content) > 15 * 1024 * 1024:
+            st.info("PDFが大きいため、アプリ内プレビューは省略しました。PDFを開くボタンから確認してください。")
+            return
+
+        encoded_pdf = base64.b64encode(response.content).decode("ascii")
+        iframe_title = html_lib.escape(paper.get("title") or "PDF preview")
+        components.html(
+            f"""
+            <iframe
+                title="{iframe_title}"
+                src="data:application/pdf;base64,{encoded_pdf}"
+                style="width:100%; height:{preview_height}px; border:0;"
+            ></iframe>
+            """,
+            height=preview_height,
+        )
 
 
 def format_duplicate_option_label(paper):
