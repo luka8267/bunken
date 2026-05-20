@@ -1166,7 +1166,64 @@ elif menu == "検索":
 elif menu == "一覧":
     user_id = get_current_user_id()
     result = fetch_user_papers(supabase, user_id)
-    df = pd.DataFrame(result.data or [])
+    all_records = result.data or []
+    try:
+        collections_result = fetch_user_collections(supabase, user_id)
+        collections = collections_result.data or []
+    except Exception:
+        logger.exception("Failed to fetch collections")
+        collections = []
+    collection_label_by_id, collection_id_by_label = build_collection_label_maps(collections)
+
+    st.header("📚 論文一覧")
+
+    with st.expander("絞り込み", expanded=True):
+        keyword = st.text_input("タイトル・著者・DOI・メモで絞り込み", key="list_keyword").strip()
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        with filter_col1:
+            status_filter = st.selectbox(
+                "ステータス",
+                [""] + READING_STATUSES,
+                key="list_status_filter",
+            )
+        with filter_col2:
+            attachment_filter = st.selectbox(
+                "添付",
+                ["", "PDFあり", "補足資料あり", "添付あり", "添付なし"],
+                key="list_attachment_filter",
+            )
+        with filter_col3:
+            selected_collection_label = st.selectbox(
+                "コレクション",
+                ["すべて"] + list(collection_id_by_label.keys()),
+                key="list_collection_filter",
+            )
+
+    scoped_records = all_records
+    if selected_collection_label != "すべて":
+        selected_collection_id = collection_id_by_label[selected_collection_label]
+        try:
+            scoped_records = fetch_papers_for_collection(
+                supabase,
+                user_id,
+                selected_collection_id,
+                columns="*",
+            )
+        except Exception:
+            logger.exception("Failed to fetch papers for selected collection")
+            st.warning("コレクション内の文献取得に失敗しました。全件から絞り込みます。")
+            scoped_records = all_records
+
+    filtered_records = filter_papers(
+        scoped_records,
+        keyword=keyword,
+        status=status_filter,
+        attachment_filter=attachment_filter,
+    )
+    df = pd.DataFrame(filtered_records)
+
+    if all_records:
+        st.caption(f"{len(filtered_records)} / {len(all_records)} 件を表示")
 
     sort_option = st.selectbox("並び替え", SORT_OPTIONS)
     added_oldest_first = st.session_state.get("list_added_oldest_first", False)
@@ -1179,8 +1236,6 @@ elif menu == "一覧":
             st.session_state["list_added_oldest_first"] = not added_oldest_first
             st.rerun()
     df = sort_papers_dataframe(df, sort_option, added_oldest_first=added_oldest_first)
-
-    st.header("📚 論文一覧")
 
     if not df.empty:
         export_records = df.to_dict(orient="records")
@@ -1212,8 +1267,10 @@ elif menu == "一覧":
                     use_container_width=True,
                 )
 
-    if df.empty:
+    if not all_records:
         st.write("データがありません")
+    elif df.empty:
+        st.write("絞り込み条件に一致する文献はありません。")
     else:
         records = df.to_dict(orient="records")
         tag_map = get_tag_map_for_papers(supabase, records)
@@ -1376,14 +1433,6 @@ elif menu == "一覧":
                 st.write("候補検索を実行してください。")
             else:
                 st.write("DOIメタデータが不足している正規化文献はありません。")
-        try:
-            collections_result = fetch_user_collections(supabase, user_id)
-            collections = collections_result.data or []
-        except Exception:
-            logger.exception("Failed to fetch collections")
-            collections = []
-        collection_label_by_id, collection_id_by_label = build_collection_label_maps(collections)
-
         for _, row in df.iterrows():
             row_dict = row.to_dict()
             item_id = clean_optional_id(row_dict.get("item_id"))
