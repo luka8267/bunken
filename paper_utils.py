@@ -1542,6 +1542,57 @@ def make_word_citation(row, style="APA"):
     return citation
 
 
+def make_bibtex_key(row):
+    authors = row.get("authors") or "unknown"
+    first_author = re.split(r",| and ", authors, maxsplit=1)[0].strip()
+    author_key = re.sub(r"[^A-Za-z0-9]+", "", first_author) or "unknown"
+    year_key = re.sub(r"[^0-9]+", "", str(row.get("year") or "")) or "nodate"
+    title_words = re.findall(r"[A-Za-z0-9]+", row.get("title") or "")
+    title_key = title_words[0] if title_words else "untitled"
+    return f"{author_key}{year_key}{title_key}"
+
+
+def normalize_bibtex_authors(authors):
+    names = [name.strip() for name in re.split(r"\s+and\s+|;", authors or "") if name.strip()]
+    if len(names) == 1:
+        names = [name.strip() for name in (authors or "").split(",") if name.strip()]
+    return names
+
+
+def normalize_bibtex_doi(doi):
+    text = normalize_doi(doi)
+    return re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE)
+
+
+def escape_bibtex_value(value):
+    text = str(value or "")
+    return text.replace("\\", "\\textbackslash{}").replace("{", "\\{").replace("}", "\\}")
+
+
+def make_bibtex_entry(row):
+    entry_type = "article" if row.get("journal") else "misc"
+    fields = [
+        ("title", row.get("title")),
+        ("author", " and ".join(normalize_bibtex_authors(row.get("authors")))),
+        ("journal", row.get("journal")),
+        ("year", row.get("year")),
+        ("volume", row.get("volume")),
+        ("number", row.get("issue")),
+        ("pages", row.get("pages")),
+        ("publisher", row.get("publisher")),
+        ("doi", normalize_bibtex_doi(row.get("doi"))),
+        ("url", row.get("url")),
+    ]
+    lines = [f"@{entry_type}{{{make_bibtex_key(row)},"]
+    for field, value in fields:
+        if value not in (None, ""):
+            lines.append(f"  {field} = {{{escape_bibtex_value(value)}}},")
+    if len(lines) > 1:
+        lines[-1] = lines[-1].rstrip(",")
+    lines.append("}")
+    return "\n".join(lines)
+
+
 def export_to_word_bytes(papers):
     doc = Document()
     doc.add_heading("参考文献", 0)

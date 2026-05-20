@@ -11,6 +11,7 @@ from paper_utils import (
     filter_document_citations,
     get_document_citation_usage_map,
     get_tag_map_for_papers,
+    make_bibtex_entry,
     make_word_citation,
     replace_tags_for_paper,
     sort_papers_dataframe,
@@ -115,6 +116,27 @@ class PaperUtilsCollectionTests(unittest.TestCase):
 
         self.assertIn("Journal, 12(3), 45-67", citation)
         self.assertIn("https://doi.org/10.1000/example", citation)
+
+    def test_make_bibtex_entry_includes_publication_metadata(self):
+        entry = make_bibtex_entry(
+            {
+                "authors": "Alpha, Beta",
+                "year": 2026,
+                "title": "Metadata Test",
+                "journal": "Journal",
+                "volume": "12",
+                "issue": "3",
+                "pages": "45-67",
+                "doi": "https://doi.org/10.1000/example",
+                "url": "https://example.com/paper",
+            }
+        )
+
+        self.assertIn("@article{Alpha2026Metadata,", entry)
+        self.assertIn("author = {Alpha and Beta}", entry)
+        self.assertIn("journal = {Journal}", entry)
+        self.assertIn("number = {3}", entry)
+        self.assertIn("doi = {10.1000/example}", entry)
 
     def test_added_order_defaults_to_newest_first(self):
         df = pd.DataFrame(

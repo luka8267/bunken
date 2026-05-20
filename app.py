@@ -52,6 +52,7 @@ from paper_utils import (
     get_document_citation_usage_map,
     get_next_display_order,
     get_tag_map_for_papers,
+    make_bibtex_entry,
     make_word_citation,
     merge_duplicate_paper,
     move_paper,
@@ -1653,6 +1654,16 @@ elif menu == "詳細":
                 mime="text/plain",
                 key=f"detail_citation_download_{selected_paper['id']}",
             )
+            bibtex_text = make_bibtex_entry(selected_paper)
+            with st.expander("BibTeX"):
+                st.code(bibtex_text, language="bibtex")
+                st.download_button(
+                    "BibTeXをダウンロード",
+                    data=bibtex_text.encode("utf-8"),
+                    file_name=f"{citation_file_name or 'citation'}.bib",
+                    mime="application/x-bibtex",
+                    key=f"detail_bibtex_download_{selected_paper['id']}",
+                )
 
             st.subheader("編集")
             render_paper_edit_form(
