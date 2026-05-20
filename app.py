@@ -388,6 +388,198 @@ def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=
             st.link_button("Webページ", paper_url)
 
 
+def build_collection_label_maps(collections):
+    collection_label_by_id = {
+        collection["id"]: f"{collection.get('name') or '無題'} [{collection['id'][:8]}]"
+        for collection in collections
+    }
+    collection_id_by_label = {
+        collection_label_by_id[collection["id"]]: collection["id"]
+        for collection in collections
+    }
+    return collection_label_by_id, collection_id_by_label
+
+
+def render_paper_edit_form(
+    paper,
+    user_id,
+    collections=None,
+    collection_label_by_id=None,
+    collection_id_by_label=None,
+    key_prefix="paper",
+):
+    row_dict = dict(paper)
+    item_id = clean_optional_id(row_dict.get("item_id"))
+    pdf_path = row_dict.get("pdf_path")
+    supporting_path = row_dict.get("supporting_path")
+    paper_url = normalize_url(row_dict.get("url"))
+    collections = collections or []
+    collection_label_by_id = collection_label_by_id or {}
+    collection_id_by_label = collection_id_by_label or {}
+
+    current_status = row_dict.get("status")
+    status_index = (
+        READING_STATUSES.index(current_status)
+        if current_status in READING_STATUSES
+        else 0
+    )
+    edit_status = st.selectbox(
+        "読書ステータス",
+        READING_STATUSES,
+        index=status_index,
+        key=f"{key_prefix}_status_{row_dict['id']}",
+    )
+    edit_notes = st.text_area(
+        "抄録メモ",
+        value=row_dict.get("notes") or "",
+        height=180,
+        key=f"{key_prefix}_notes_{row_dict['id']}",
+    )
+    edit_url = st.text_input(
+        "URL",
+        value=paper_url,
+        key=f"{key_prefix}_url_{row_dict['id']}",
+    )
+    edit_doi = st.text_input(
+        "DOI",
+        value=row_dict.get("doi") or "",
+        key=f"{key_prefix}_doi_{row_dict['id']}",
+    )
+    edit_meta_col1, edit_meta_col2 = st.columns(2)
+    with edit_meta_col1:
+        edit_volume = st.text_input(
+            "巻",
+            value=row_dict.get("volume") or "",
+            key=f"{key_prefix}_volume_{row_dict['id']}",
+        )
+        edit_pages = st.text_input(
+            "ページ",
+            value=row_dict.get("pages") or "",
+            key=f"{key_prefix}_pages_{row_dict['id']}",
+        )
+    with edit_meta_col2:
+        edit_issue = st.text_input(
+            "号",
+            value=row_dict.get("issue") or "",
+            key=f"{key_prefix}_issue_{row_dict['id']}",
+        )
+        edit_publisher = st.text_input(
+            "出版社",
+            value=row_dict.get("publisher") or "",
+            key=f"{key_prefix}_publisher_{row_dict['id']}",
+        )
+
+    selected_collection_labels = []
+    if collections:
+        try:
+            current_collection_ids = fetch_paper_collection_ids(
+                supabase,
+                row_dict["id"],
+                item_id,
+            )
+        except Exception:
+            logger.exception("Failed to fetch paper collections")
+            current_collection_ids = []
+        selected_collection_labels = st.multiselect(
+            "コレクション",
+            options=list(collection_id_by_label.keys()),
+            default=[
+                collection_label_by_id[collection_id]
+                for collection_id in current_collection_ids
+                if collection_id in collection_label_by_id
+            ],
+            key=f"{key_prefix}_collections_{row_dict['id']}",
+        )
+
+    new_pdf_file = st.file_uploader(
+        "PDFを追加・差し替え",
+        type=["pdf"],
+        key=f"{key_prefix}_pdf_upload_{row_dict['id']}",
+    )
+    new_supporting_file = st.file_uploader(
+        "サポーティング資料を追加・差し替え",
+        type=SUPPORTING_FILE_TYPES,
+        key=f"{key_prefix}_supporting_upload_{row_dict['id']}",
+    )
+
+    if st.button("💾 保存", key=f"{key_prefix}_save_{row_dict['id']}"):
+        try:
+            new_pdf_path = (
+                upload_pdf_to_storage(supabase, new_pdf_file, user_id)
+                if new_pdf_file
+                else None
+            )
+            new_supporting_path = (
+                upload_supporting_file_to_storage(
+                    supabase,
+                    new_supporting_file,
+                    user_id,
+                )
+                if new_supporting_file
+                else None
+            )
+            normalized_edit_url = normalize_url(edit_url) or None
+            current_url = normalize_url(row_dict.get("url")) or None
+            normalized_edit_doi = normalize_doi(edit_doi)
+            current_doi = normalize_doi(row_dict.get("doi"))
+            if (
+                edit_status != (row_dict.get("status") or "")
+                or edit_notes != (row_dict.get("notes") or "")
+                or normalized_edit_url != current_url
+                or normalized_edit_doi != current_doi
+                or edit_volume != (row_dict.get("volume") or "")
+                or edit_issue != (row_dict.get("issue") or "")
+                or edit_pages != (row_dict.get("pages") or "")
+                or edit_publisher != (row_dict.get("publisher") or "")
+            ):
+                update_paper_details(
+                    supabase,
+                    user_id,
+                    row_dict["id"],
+                    edit_status,
+                    edit_notes,
+                    normalized_edit_url,
+                    item_id=item_id,
+                    doi=normalized_edit_doi,
+                    volume=edit_volume,
+                    issue=edit_issue,
+                    pages=edit_pages,
+                    publisher=edit_publisher,
+                )
+            if new_pdf_path or new_supporting_path:
+                update_paper_files(
+                    supabase,
+                    user_id,
+                    row_dict["id"],
+                    pdf_path=new_pdf_path,
+                    supporting_path=new_supporting_path,
+                    item_id=item_id,
+                )
+            if collections:
+                set_paper_collections(
+                    supabase,
+                    row_dict["id"],
+                    [
+                        collection_id_by_label[label]
+                        for label in selected_collection_labels
+                    ],
+                    item_id=item_id,
+                )
+            if new_pdf_path and isinstance(pdf_path, str) and pdf_path.strip():
+                delete_pdf_from_storage(supabase, pdf_path)
+            if (
+                new_supporting_path
+                and isinstance(supporting_path, str)
+                and supporting_path.strip()
+            ):
+                delete_pdf_from_storage(supabase, supporting_path)
+            st.success("更新しました")
+            st.rerun()
+        except Exception:
+            logger.exception("Failed to update paper")
+            st.error("更新に失敗しました。入力内容とログを確認してください。")
+
+
 def format_duplicate_option_label(paper):
     memo = (paper.get("notes") or "").strip().replace("\n", " ")
     memo_part = f" / メモ: {memo[:60]}" if memo else " / メモなし"
@@ -755,7 +947,7 @@ if post_action_warning:
     st.warning(post_action_warning)
 menu = st.sidebar.selectbox(
     "メニュー",
-    ["追加", "検索", "一覧", "タグ検索", "コレクション", "重複確認", "文書引用"],
+    ["追加", "検索", "一覧", "詳細", "タグ検索", "コレクション", "重複確認", "文書引用"],
 )
 
 
@@ -1105,14 +1297,7 @@ elif menu == "一覧":
         except Exception:
             logger.exception("Failed to fetch collections")
             collections = []
-        collection_label_by_id = {
-            collection["id"]: f"{collection.get('name') or '無題'} [{collection['id'][:8]}]"
-            for collection in collections
-        }
-        collection_id_by_label = {
-            collection_label_by_id[collection["id"]]: collection["id"]
-            for collection in collections
-        }
+        collection_label_by_id, collection_id_by_label = build_collection_label_maps(collections)
 
         for _, row in df.iterrows():
             row_dict = row.to_dict()
@@ -1226,168 +1411,91 @@ elif menu == "一覧":
                         st.rerun()
 
                 with st.expander("編集"):
-                    current_status = row_dict.get("status")
-                    status_index = (
-                        READING_STATUSES.index(current_status)
-                        if current_status in READING_STATUSES
-                        else 0
+                    render_paper_edit_form(
+                        row_dict,
+                        user_id,
+                        collections=collections,
+                        collection_label_by_id=collection_label_by_id,
+                        collection_id_by_label=collection_id_by_label,
+                        key_prefix="list",
                     )
-                    edit_status = st.selectbox(
-                        "読書ステータス",
-                        READING_STATUSES,
-                        index=status_index,
-                        key=f"status_{row_dict['id']}",
-                    )
-
-                    edit_notes = st.text_area(
-                        "抄録メモ",
-                        value=row_dict.get("notes") or "",
-                        height=150,
-                        key=f"notes_{row_dict['id']}",
-                    )
-                    edit_url = st.text_input(
-                        "URL",
-                        value=paper_url,
-                        key=f"url_{row_dict['id']}",
-                    )
-                    edit_doi = st.text_input(
-                        "DOI",
-                        value=row_dict.get("doi") or "",
-                        key=f"doi_{row_dict['id']}",
-                    )
-                    edit_meta_col1, edit_meta_col2 = st.columns(2)
-                    with edit_meta_col1:
-                        edit_volume = st.text_input(
-                            "巻",
-                            value=row_dict.get("volume") or "",
-                            key=f"volume_{row_dict['id']}",
-                        )
-                        edit_pages = st.text_input(
-                            "ページ",
-                            value=row_dict.get("pages") or "",
-                            key=f"pages_{row_dict['id']}",
-                        )
-                    with edit_meta_col2:
-                        edit_issue = st.text_input(
-                            "号",
-                            value=row_dict.get("issue") or "",
-                            key=f"issue_{row_dict['id']}",
-                        )
-                        edit_publisher = st.text_input(
-                            "出版社",
-                            value=row_dict.get("publisher") or "",
-                            key=f"publisher_{row_dict['id']}",
-                        )
-                    selected_collection_labels = []
-                    if collections:
-                        try:
-                            current_collection_ids = fetch_paper_collection_ids(
-                                supabase,
-                                row_dict["id"],
-                                item_id,
-                            )
-                        except Exception:
-                            logger.exception("Failed to fetch paper collections")
-                            current_collection_ids = []
-                        selected_collection_labels = st.multiselect(
-                            "コレクション",
-                            options=list(collection_id_by_label.keys()),
-                            default=[
-                                collection_label_by_id[collection_id]
-                                for collection_id in current_collection_ids
-                                if collection_id in collection_label_by_id
-                            ],
-                            key=f"collections_{row_dict['id']}",
-                        )
-                    new_pdf_file = st.file_uploader(
-                        "PDFを追加・差し替え",
-                        type=["pdf"],
-                        key=f"pdf_upload_{row_dict['id']}",
-                    )
-                    new_supporting_file = st.file_uploader(
-                        "サポーティング資料を追加・差し替え",
-                        type=SUPPORTING_FILE_TYPES,
-                        key=f"supporting_upload_{row_dict['id']}",
-                    )
-
-                    if st.button("💾 保存", key=f"save_{row_dict['id']}"):
-                        try:
-                            new_pdf_path = (
-                                upload_pdf_to_storage(supabase, new_pdf_file, user_id)
-                                if new_pdf_file
-                                else None
-                            )
-                            new_supporting_path = (
-                                upload_supporting_file_to_storage(
-                                    supabase,
-                                    new_supporting_file,
-                                    user_id,
-                                )
-                                if new_supporting_file
-                                else None
-                            )
-                            normalized_edit_url = normalize_url(edit_url) or None
-                            current_url = normalize_url(row_dict.get("url")) or None
-                            normalized_edit_doi = normalize_doi(edit_doi)
-                            current_doi = normalize_doi(row_dict.get("doi"))
-                            if (
-                                edit_status != (row_dict.get("status") or "")
-                                or edit_notes != (row_dict.get("notes") or "")
-                                or normalized_edit_url != current_url
-                                or normalized_edit_doi != current_doi
-                                or edit_volume != (row_dict.get("volume") or "")
-                                or edit_issue != (row_dict.get("issue") or "")
-                                or edit_pages != (row_dict.get("pages") or "")
-                                or edit_publisher != (row_dict.get("publisher") or "")
-                            ):
-                                update_paper_details(
-                                    supabase,
-                                    user_id,
-                                    row_dict["id"],
-                                    edit_status,
-                                    edit_notes,
-                                    normalized_edit_url,
-                                    item_id=item_id,
-                                    doi=normalized_edit_doi,
-                                    volume=edit_volume,
-                                    issue=edit_issue,
-                                    pages=edit_pages,
-                                    publisher=edit_publisher,
-                                )
-                            if new_pdf_path or new_supporting_path:
-                                update_paper_files(
-                                    supabase,
-                                    user_id,
-                                    row_dict["id"],
-                                    pdf_path=new_pdf_path,
-                                    supporting_path=new_supporting_path,
-                                    item_id=item_id,
-                                )
-                            if collections:
-                                set_paper_collections(
-                                    supabase,
-                                    row_dict["id"],
-                                    [
-                                        collection_id_by_label[label]
-                                        for label in selected_collection_labels
-                                    ],
-                                    item_id=item_id,
-                                )
-                            if new_pdf_path and isinstance(pdf_path, str) and pdf_path.strip():
-                                delete_pdf_from_storage(supabase, pdf_path)
-                            if (
-                                new_supporting_path
-                                and isinstance(supporting_path, str)
-                                and supporting_path.strip()
-                            ):
-                                delete_pdf_from_storage(supabase, supporting_path)
-                            st.success("更新しました")
-                            st.rerun()
-                        except Exception:
-                            logger.exception("Failed to update paper")
-                            st.error("更新に失敗しました。入力内容とログを確認してください。")
 
                 st.divider()
+
+
+elif menu == "詳細":
+    user_id = get_current_user_id()
+    st.header("文献詳細")
+
+    try:
+        result = fetch_user_papers(
+            supabase,
+            user_id,
+            columns=(
+                "id, item_id, title, authors, journal, year, doi, url, volume, issue, "
+                "pages, publisher, item_type, status, notes, pdf_path, "
+                "supporting_path, display_order"
+            ),
+        )
+        papers = result.data or []
+    except Exception:
+        logger.exception("Failed to fetch papers for detail view")
+        st.error("文献の取得に失敗しました。")
+        papers = []
+
+    if not papers:
+        st.write("文献がありません。")
+    else:
+        keyword = st.text_input("タイトル・著者・DOIで絞り込み", key="detail_keyword").strip()
+        filtered_papers = filter_papers(papers, keyword=keyword) if keyword else papers
+
+        if not filtered_papers:
+            st.write("検索条件に一致する文献はありません。")
+        else:
+            def format_detail_option(paper):
+                title = paper.get("title") or "無題"
+                authors = paper.get("authors") or "著者不明"
+                year = paper.get("year") or "-"
+                doi = normalize_doi(paper.get("doi"))
+                suffix = f" / DOI: {doi}" if doi else ""
+                return f"{title} / {authors} / {year}{suffix}"
+
+            selected_paper = st.selectbox(
+                "文献",
+                filtered_papers,
+                format_func=format_detail_option,
+                key="detail_selected_paper",
+            )
+
+            try:
+                collections_result = fetch_user_collections(supabase, user_id)
+                collections = collections_result.data or []
+            except Exception:
+                logger.exception("Failed to fetch collections")
+                collections = []
+            collection_label_by_id, collection_id_by_label = build_collection_label_maps(collections)
+
+            tag_map = get_tag_map_for_papers(supabase, [selected_paper])
+            citation_usage_map = get_citation_usage_map_for_display(user_id, [selected_paper])
+
+            render_paper_summary(
+                selected_paper,
+                tag_map=tag_map,
+                citation_usage_map=citation_usage_map,
+            )
+
+            st.subheader("参考文献")
+            st.code(make_word_citation(selected_paper, style="APA"))
+
+            st.subheader("編集")
+            render_paper_edit_form(
+                selected_paper,
+                user_id,
+                collections=collections,
+                collection_label_by_id=collection_label_by_id,
+                collection_id_by_label=collection_id_by_label,
+                key_prefix="detail",
+            )
 
 
 elif menu == "タグ検索":
