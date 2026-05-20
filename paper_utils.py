@@ -1616,6 +1616,14 @@ def make_ris_entry(row):
     return "\n".join(lines)
 
 
+def export_to_bibtex_text(papers):
+    return "\n\n".join(make_bibtex_entry(paper) for paper in papers or [])
+
+
+def export_to_ris_text(papers):
+    return "\n\n".join(make_ris_entry(paper) for paper in papers or [])
+
+
 def export_to_word_bytes(papers):
     doc = Document()
     doc.add_heading("参考文献", 0)

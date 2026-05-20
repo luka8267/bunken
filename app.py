@@ -36,6 +36,8 @@ from paper_utils import (
     delete_paper,
     delete_pdf_from_storage,
     delete_user_document,
+    export_to_bibtex_text,
+    export_to_ris_text,
     export_to_word_bytes,
     fetch_collection_counts,
     fetch_document_citations,
@@ -1180,13 +1182,30 @@ elif menu == "一覧":
     st.header("📚 論文一覧")
 
     if not df.empty:
-        word_bytes = export_to_word_bytes(df.to_dict(orient="records"))
-        st.download_button(
-            "📄 Word出力",
-            data=word_bytes,
-            file_name="references.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
+        export_records = df.to_dict(orient="records")
+        export_col1, export_col2, export_col3 = st.columns(3)
+        with export_col1:
+            word_bytes = export_to_word_bytes(export_records)
+            st.download_button(
+                "📄 Word出力",
+                data=word_bytes,
+                file_name="references.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        with export_col2:
+            st.download_button(
+                "BibTeX出力",
+                data=export_to_bibtex_text(export_records).encode("utf-8"),
+                file_name="references.bib",
+                mime="application/x-bibtex",
+            )
+        with export_col3:
+            st.download_button(
+                "RIS出力",
+                data=export_to_ris_text(export_records).encode("utf-8"),
+                file_name="references.ris",
+                mime="application/x-research-info-systems",
+            )
 
     if df.empty:
         st.write("データがありません")

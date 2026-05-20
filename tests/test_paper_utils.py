@@ -6,6 +6,8 @@ from postgrest.exceptions import APIError
 from paper_utils import (
     build_document_citation_export_rows,
     delete_user_document,
+    export_to_bibtex_text,
+    export_to_ris_text,
     fetch_collection_counts,
     fetch_paper_collection_ids,
     filter_document_citations,
@@ -160,6 +162,30 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         self.assertIn("T2  - Journal", entry)
         self.assertIn("DO  - 10.1000/example", entry)
         self.assertTrue(entry.endswith("ER  -"))
+
+    def test_bulk_bibtex_and_ris_exports_join_entries(self):
+        papers = [
+            {
+                "authors": "Alpha",
+                "year": 2026,
+                "title": "First",
+                "journal": "Journal A",
+            },
+            {
+                "authors": "Beta",
+                "year": 2025,
+                "title": "Second",
+                "journal": "Journal B",
+            },
+        ]
+
+        bibtex_text = export_to_bibtex_text(papers)
+        ris_text = export_to_ris_text(papers)
+
+        self.assertEqual(bibtex_text.count("@article"), 2)
+        self.assertIn("\n\n@article", bibtex_text)
+        self.assertEqual(ris_text.count("TY  - JOUR"), 2)
+        self.assertIn("\n\nTY  - JOUR", ris_text)
 
     def test_added_order_defaults_to_newest_first(self):
         df = pd.DataFrame(
