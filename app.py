@@ -1199,20 +1199,35 @@ elif menu == "一覧":
                 key="list_collection_filter",
             )
 
-    scoped_records = all_records
-    if selected_collection_label != "すべて":
-        selected_collection_id = collection_id_by_label[selected_collection_label]
-        try:
-            scoped_records = fetch_papers_for_collection(
-                supabase,
-                user_id,
-                selected_collection_id,
-                columns="*",
-            )
-        except Exception:
-            logger.exception("Failed to fetch papers for selected collection")
-            st.warning("コレクション内の文献取得に失敗しました。全件から絞り込みます。")
-            scoped_records = all_records
+        scoped_records = all_records
+        if selected_collection_label != "すべて":
+            selected_collection_id = collection_id_by_label[selected_collection_label]
+            try:
+                scoped_records = fetch_papers_for_collection(
+                    supabase,
+                    user_id,
+                    selected_collection_id,
+                    columns="*",
+                )
+            except Exception:
+                logger.exception("Failed to fetch papers for selected collection")
+                st.warning("コレクション内の文献取得に失敗しました。全件から絞り込みます。")
+                scoped_records = all_records
+
+        scoped_tag_map = get_tag_map_for_papers(supabase, scoped_records)
+        tag_options = sorted(
+            {
+                tag
+                for record in scoped_records
+                for tag in get_paper_tag_list(scoped_tag_map, record)
+            },
+            key=str.casefold,
+        )
+        selected_tag = st.selectbox(
+            "タグ",
+            ["すべて"] + tag_options,
+            key="list_tag_filter",
+        )
 
     filtered_records = filter_papers(
         scoped_records,
@@ -1220,6 +1235,12 @@ elif menu == "一覧":
         status=status_filter,
         attachment_filter=attachment_filter,
     )
+    if selected_tag != "すべて":
+        filtered_records = [
+            record
+            for record in filtered_records
+            if selected_tag in get_paper_tag_list(scoped_tag_map, record)
+        ]
     df = pd.DataFrame(filtered_records)
 
     if all_records:
