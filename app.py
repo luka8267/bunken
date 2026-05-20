@@ -53,6 +53,7 @@ from paper_utils import (
     get_next_display_order,
     get_tag_map_for_papers,
     make_bibtex_entry,
+    make_ris_entry,
     make_word_citation,
     merge_duplicate_paper,
     move_paper,
@@ -1663,6 +1664,16 @@ elif menu == "詳細":
                     file_name=f"{citation_file_name or 'citation'}.bib",
                     mime="application/x-bibtex",
                     key=f"detail_bibtex_download_{selected_paper['id']}",
+                )
+            ris_text = make_ris_entry(selected_paper)
+            with st.expander("RIS"):
+                st.code(ris_text)
+                st.download_button(
+                    "RISをダウンロード",
+                    data=ris_text.encode("utf-8"),
+                    file_name=f"{citation_file_name or 'citation'}.ris",
+                    mime="application/x-research-info-systems",
+                    key=f"detail_ris_download_{selected_paper['id']}",
                 )
 
             st.subheader("編集")

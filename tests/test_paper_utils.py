@@ -12,6 +12,7 @@ from paper_utils import (
     get_document_citation_usage_map,
     get_tag_map_for_papers,
     make_bibtex_entry,
+    make_ris_entry,
     make_word_citation,
     replace_tags_for_paper,
     sort_papers_dataframe,
@@ -137,6 +138,28 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         self.assertIn("journal = {Journal}", entry)
         self.assertIn("number = {3}", entry)
         self.assertIn("doi = {10.1000/example}", entry)
+
+    def test_make_ris_entry_includes_publication_metadata(self):
+        entry = make_ris_entry(
+            {
+                "authors": "Alpha, Beta",
+                "year": 2026,
+                "title": "Metadata Test",
+                "journal": "Journal",
+                "volume": "12",
+                "issue": "3",
+                "pages": "45-67",
+                "doi": "https://doi.org/10.1000/example",
+                "url": "https://example.com/paper",
+            }
+        )
+
+        self.assertIn("TY  - JOUR", entry)
+        self.assertIn("AU  - Alpha", entry)
+        self.assertIn("AU  - Beta", entry)
+        self.assertIn("T2  - Journal", entry)
+        self.assertIn("DO  - 10.1000/example", entry)
+        self.assertTrue(entry.endswith("ER  -"))
 
     def test_added_order_defaults_to_newest_first(self):
         df = pd.DataFrame(

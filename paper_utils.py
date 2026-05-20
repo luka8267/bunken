@@ -1593,6 +1593,29 @@ def make_bibtex_entry(row):
     return "\n".join(lines)
 
 
+def make_ris_entry(row):
+    ris_type = "JOUR" if row.get("journal") else "GEN"
+    lines = [f"TY  - {ris_type}"]
+    for author in normalize_bibtex_authors(row.get("authors")):
+        lines.append(f"AU  - {author}")
+    field_map = [
+        ("TI", row.get("title")),
+        ("T2", row.get("journal")),
+        ("PY", row.get("year")),
+        ("VL", row.get("volume")),
+        ("IS", row.get("issue")),
+        ("SP", row.get("pages")),
+        ("PB", row.get("publisher")),
+        ("DO", normalize_bibtex_doi(row.get("doi"))),
+        ("UR", row.get("url")),
+    ]
+    for tag, value in field_map:
+        if value not in (None, ""):
+            lines.append(f"{tag}  - {value}")
+    lines.append("ER  -")
+    return "\n".join(lines)
+
+
 def export_to_word_bytes(papers):
     doc = Document()
     doc.add_heading("参考文献", 0)
