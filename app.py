@@ -1638,83 +1638,87 @@ elif menu == "詳細":
             tag_map = get_tag_map_for_papers(supabase, [selected_paper])
             citation_usage_map = get_citation_usage_map_for_display(user_id, [selected_paper])
 
-            render_paper_summary(
-                selected_paper,
-                tag_map=tag_map,
-                citation_usage_map=citation_usage_map,
+            info_tab, pdf_tab, tags_tab, citation_tab, edit_tab = st.tabs(
+                ["概要", "PDF", "タグ", "引用", "編集"]
             )
+            with info_tab:
+                render_paper_summary(
+                    selected_paper,
+                    tag_map=tag_map,
+                    citation_usage_map=citation_usage_map,
+                )
 
-            st.subheader("PDF")
-            render_paper_pdf_preview(selected_paper, key_prefix="detail")
+            with pdf_tab:
+                render_paper_pdf_preview(selected_paper, key_prefix="detail")
 
-            st.subheader("タグ")
-            render_paper_tag_editor(
-                selected_paper,
-                user_id,
-                tag_map,
-                key_prefix="detail",
-            )
+            with tags_tab:
+                render_paper_tag_editor(
+                    selected_paper,
+                    user_id,
+                    tag_map,
+                    key_prefix="detail",
+                )
 
-            st.subheader("参考文献")
-            citation_style = st.segmented_control(
-                "引用スタイル",
-                ["APA", "Vancouver", "Nature"],
-                default="APA",
-                key=f"detail_citation_style_{selected_paper['id']}",
-            )
-            citation_text = make_word_citation(selected_paper, style=citation_style)
-            st.code(citation_text)
-            citation_file_name = re.sub(
-                r"[^A-Za-z0-9._-]+",
-                "-",
-                selected_paper.get("title") or "citation",
-            ).strip("-")
-            with st.expander("エクスポート"):
-                export_col1, export_col2, export_col3 = st.columns(3)
-                with export_col1:
-                    st.download_button(
-                        "テキスト",
-                        data=citation_text.encode("utf-8"),
-                        file_name=f"{citation_file_name or 'citation'}-{citation_style}.txt",
-                        mime="text/plain",
-                        key=f"detail_citation_download_{selected_paper['id']}",
-                        use_container_width=True,
-                    )
-                bibtex_text = make_bibtex_entry(selected_paper)
-                with export_col2:
-                    st.download_button(
-                        "BibTeX",
-                        data=bibtex_text.encode("utf-8"),
-                        file_name=f"{citation_file_name or 'citation'}.bib",
-                        mime="application/x-bibtex",
-                        key=f"detail_bibtex_download_{selected_paper['id']}",
-                        use_container_width=True,
-                    )
-                ris_text = make_ris_entry(selected_paper)
-                with export_col3:
-                    st.download_button(
-                        "RIS",
-                        data=ris_text.encode("utf-8"),
-                        file_name=f"{citation_file_name or 'citation'}.ris",
-                        mime="application/x-research-info-systems",
-                        key=f"detail_ris_download_{selected_paper['id']}",
-                        use_container_width=True,
-                    )
-                preview_tab1, preview_tab2 = st.tabs(["BibTeX", "RIS"])
-                with preview_tab1:
-                    st.code(bibtex_text, language="bibtex")
-                with preview_tab2:
-                    st.code(ris_text)
+            with citation_tab:
+                citation_style = st.segmented_control(
+                    "引用スタイル",
+                    ["APA", "Vancouver", "Nature"],
+                    default="APA",
+                    key=f"detail_citation_style_{selected_paper['id']}",
+                )
+                citation_text = make_word_citation(selected_paper, style=citation_style)
+                st.code(citation_text)
+                citation_file_name = re.sub(
+                    r"[^A-Za-z0-9._-]+",
+                    "-",
+                    selected_paper.get("title") or "citation",
+                ).strip("-")
+                with st.expander("エクスポート"):
+                    export_col1, export_col2, export_col3 = st.columns(3)
+                    with export_col1:
+                        st.download_button(
+                            "テキスト",
+                            data=citation_text.encode("utf-8"),
+                            file_name=f"{citation_file_name or 'citation'}-{citation_style}.txt",
+                            mime="text/plain",
+                            key=f"detail_citation_download_{selected_paper['id']}",
+                            use_container_width=True,
+                        )
+                    bibtex_text = make_bibtex_entry(selected_paper)
+                    with export_col2:
+                        st.download_button(
+                            "BibTeX",
+                            data=bibtex_text.encode("utf-8"),
+                            file_name=f"{citation_file_name or 'citation'}.bib",
+                            mime="application/x-bibtex",
+                            key=f"detail_bibtex_download_{selected_paper['id']}",
+                            use_container_width=True,
+                        )
+                    ris_text = make_ris_entry(selected_paper)
+                    with export_col3:
+                        st.download_button(
+                            "RIS",
+                            data=ris_text.encode("utf-8"),
+                            file_name=f"{citation_file_name or 'citation'}.ris",
+                            mime="application/x-research-info-systems",
+                            key=f"detail_ris_download_{selected_paper['id']}",
+                            use_container_width=True,
+                        )
+                    preview_tab1, preview_tab2 = st.tabs(["BibTeX", "RIS"])
+                    with preview_tab1:
+                        st.code(bibtex_text, language="bibtex")
+                    with preview_tab2:
+                        st.code(ris_text)
 
-            st.subheader("編集")
-            render_paper_edit_form(
-                selected_paper,
-                user_id,
-                collections=collections,
-                collection_label_by_id=collection_label_by_id,
-                collection_id_by_label=collection_id_by_label,
-                key_prefix="detail",
-            )
+            with edit_tab:
+                render_paper_edit_form(
+                    selected_paper,
+                    user_id,
+                    collections=collections,
+                    collection_label_by_id=collection_label_by_id,
+                    collection_id_by_label=collection_id_by_label,
+                    key_prefix="detail",
+                )
 
 
 elif menu == "タグ検索":
