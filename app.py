@@ -945,10 +945,15 @@ st.title("📚 文献管理アプリ")
 post_action_warning = st.session_state.pop("post_action_warning", None)
 if post_action_warning:
     st.warning(post_action_warning)
+MENU_OPTIONS = ["追加", "検索", "一覧", "詳細", "タグ検索", "コレクション", "重複確認", "文書引用"]
+if st.session_state.get("active_menu") not in MENU_OPTIONS:
+    st.session_state["active_menu"] = "追加"
 menu = st.sidebar.selectbox(
     "メニュー",
-    ["追加", "検索", "一覧", "詳細", "タグ検索", "コレクション", "重複確認", "文書引用"],
+    MENU_OPTIONS,
+    index=MENU_OPTIONS.index(st.session_state["active_menu"]),
 )
+st.session_state["active_menu"] = menu
 
 
 if menu == "追加":
@@ -1357,7 +1362,7 @@ elif menu == "一覧":
                             if details:
                                 st.caption(" / ".join(details))
 
-                col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
 
                 with col1:
                     if signed_url:
@@ -1387,6 +1392,12 @@ elif menu == "一覧":
                         st.code(make_word_citation(row_dict, style="APA"))
 
                 with col6:
+                    if st.button("詳細", key=f"detail_{row_dict['id']}"):
+                        st.session_state["detail_selected_paper_id"] = str(row_dict["id"])
+                        st.session_state["active_menu"] = "詳細"
+                        st.rerun()
+
+                with col7:
                     if st.button("⬆", key=f"up_{row_dict['id']}"):
                         move_paper(
                             supabase,
@@ -1398,7 +1409,7 @@ elif menu == "一覧":
                         )
                         st.rerun()
 
-                with col7:
+                with col8:
                     if st.button("⬇", key=f"down_{row_dict['id']}"):
                         move_paper(
                             supabase,
@@ -1452,7 +1463,13 @@ elif menu == "詳細":
         if not filtered_papers:
             st.write("検索条件に一致する文献はありません。")
         else:
-            def format_detail_option(paper):
+            paper_by_id = {str(paper["id"]): paper for paper in filtered_papers}
+            paper_ids = list(paper_by_id.keys())
+            if st.session_state.get("detail_selected_paper_id") not in paper_by_id:
+                st.session_state["detail_selected_paper_id"] = paper_ids[0]
+
+            def format_detail_option(paper_id):
+                paper = paper_by_id[paper_id]
                 title = paper.get("title") or "無題"
                 authors = paper.get("authors") or "著者不明"
                 year = paper.get("year") or "-"
@@ -1460,12 +1477,13 @@ elif menu == "詳細":
                 suffix = f" / DOI: {doi}" if doi else ""
                 return f"{title} / {authors} / {year}{suffix}"
 
-            selected_paper = st.selectbox(
+            selected_paper_id = st.selectbox(
                 "文献",
-                filtered_papers,
+                paper_ids,
                 format_func=format_detail_option,
-                key="detail_selected_paper",
+                key="detail_selected_paper_id",
             )
+            selected_paper = paper_by_id[selected_paper_id]
 
             try:
                 collections_result = fetch_user_collections(supabase, user_id)
