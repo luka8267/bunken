@@ -617,7 +617,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
 
     col1, col2 = st.columns([1, 1])
     with col1:
-        st.link_button("PDFを開く", signed_url)
+        st.link_button("PDFを開く", signed_url, use_container_width=True)
     with col2:
         try:
             response = requests.get(signed_url, timeout=20)
@@ -633,6 +633,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
                 file_name=f"{safe_title or 'paper'}.pdf",
                 mime="application/pdf",
                 key=f"{key_prefix}_pdf_download_{paper['id']}",
+                use_container_width=True,
             )
 
     st.caption("Chromeのブロックを避けるため、アプリ内PDF埋め込みは無効にしています。")
@@ -1183,29 +1184,33 @@ elif menu == "一覧":
 
     if not df.empty:
         export_records = df.to_dict(orient="records")
-        export_col1, export_col2, export_col3 = st.columns(3)
-        with export_col1:
-            word_bytes = export_to_word_bytes(export_records)
-            st.download_button(
-                "📄 Word出力",
-                data=word_bytes,
-                file_name="references.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-        with export_col2:
-            st.download_button(
-                "BibTeX出力",
-                data=export_to_bibtex_text(export_records).encode("utf-8"),
-                file_name="references.bib",
-                mime="application/x-bibtex",
-            )
-        with export_col3:
-            st.download_button(
-                "RIS出力",
-                data=export_to_ris_text(export_records).encode("utf-8"),
-                file_name="references.ris",
-                mime="application/x-research-info-systems",
-            )
+        with st.expander("エクスポート", expanded=False):
+            export_col1, export_col2, export_col3 = st.columns(3)
+            with export_col1:
+                word_bytes = export_to_word_bytes(export_records)
+                st.download_button(
+                    "Word",
+                    data=word_bytes,
+                    file_name="references.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                )
+            with export_col2:
+                st.download_button(
+                    "BibTeX",
+                    data=export_to_bibtex_text(export_records).encode("utf-8"),
+                    file_name="references.bib",
+                    mime="application/x-bibtex",
+                    use_container_width=True,
+                )
+            with export_col3:
+                st.download_button(
+                    "RIS",
+                    data=export_to_ris_text(export_records).encode("utf-8"),
+                    file_name="references.ris",
+                    mime="application/x-research-info-systems",
+                    use_container_width=True,
+                )
 
     if df.empty:
         st.write("データがありません")
@@ -1402,9 +1407,6 @@ elif menu == "一覧":
                     st.write("メモ:")
                     st.write(row_dict["notes"])
 
-                if paper_url:
-                    st.link_button("Webページ", paper_url)
-
                 attachments = []
                 if signed_url:
                     attachments.append("PDF")
@@ -1437,64 +1439,64 @@ elif menu == "一覧":
                             if details:
                                 st.caption(" / ".join(details))
 
-                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
+                action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns(5)
 
-                with col1:
-                    if signed_url:
-                        st.link_button("📄 PDF", signed_url)
-
-                with col2:
-                    if supporting_url:
-                        st.link_button("資料", supporting_url)
-
-                with col3:
-                    if signed_url:
-                        st.link_button("👀 開く", signed_url)
-
-                with col4:
-                    if st.button("🗑 削除", key=f"del_{row_dict['id']}"):
-                        delete_result = delete_paper(supabase, user_id, row_dict)
-                        st.success("削除しました")
-                        if delete_result.get("storage_errors"):
-                            st.session_state["post_action_warning"] = (
-                                "DBからは削除しましたが、Storageファイル削除に失敗しました: "
-                                + " / ".join(delete_result["storage_errors"])
-                            )
-                        st.rerun()
-
-                with col5:
-                    if st.button("📚 引用", key=f"cite_{row_dict['id']}"):
-                        st.code(make_word_citation(row_dict, style="APA"))
-
-                with col6:
-                    if st.button("詳細", key=f"detail_{row_dict['id']}"):
+                with action_col1:
+                    if st.button("詳細", key=f"detail_{row_dict['id']}", use_container_width=True):
                         st.session_state["detail_selected_paper_id"] = str(row_dict["id"])
                         st.session_state["active_menu"] = "詳細"
                         st.rerun()
 
-                with col7:
-                    if st.button("⬆", key=f"up_{row_dict['id']}"):
-                        move_paper(
-                            supabase,
-                            user_id,
-                            row_dict["id"],
-                            row_dict["display_order"],
-                            "up",
-                            item_id=item_id,
-                        )
-                        st.rerun()
+                with action_col2:
+                    if st.button("引用", key=f"cite_{row_dict['id']}", use_container_width=True):
+                        st.code(make_word_citation(row_dict, style="APA"))
 
-                with col8:
-                    if st.button("⬇", key=f"down_{row_dict['id']}"):
-                        move_paper(
-                            supabase,
-                            user_id,
-                            row_dict["id"],
-                            row_dict["display_order"],
-                            "down",
-                            item_id=item_id,
-                        )
-                        st.rerun()
+                with action_col3:
+                    if signed_url:
+                        st.link_button("PDF", signed_url, use_container_width=True)
+
+                with action_col4:
+                    if supporting_url:
+                        st.link_button("資料", supporting_url, use_container_width=True)
+
+                with action_col5:
+                    if paper_url:
+                        st.link_button("Web", paper_url, use_container_width=True)
+
+                with st.expander("並び順・削除"):
+                    order_col1, order_col2, delete_col = st.columns([1, 1, 2])
+                    with order_col1:
+                        if st.button("上へ", key=f"up_{row_dict['id']}", use_container_width=True):
+                            move_paper(
+                                supabase,
+                                user_id,
+                                row_dict["id"],
+                                row_dict["display_order"],
+                                "up",
+                                item_id=item_id,
+                            )
+                            st.rerun()
+                    with order_col2:
+                        if st.button("下へ", key=f"down_{row_dict['id']}", use_container_width=True):
+                            move_paper(
+                                supabase,
+                                user_id,
+                                row_dict["id"],
+                                row_dict["display_order"],
+                                "down",
+                                item_id=item_id,
+                            )
+                            st.rerun()
+                    with delete_col:
+                        if st.button("削除", key=f"del_{row_dict['id']}", use_container_width=True):
+                            delete_result = delete_paper(supabase, user_id, row_dict)
+                            st.success("削除しました")
+                            if delete_result.get("storage_errors"):
+                                st.session_state["post_action_warning"] = (
+                                    "DBからは削除しましたが、Storageファイル削除に失敗しました: "
+                                    + " / ".join(delete_result["storage_errors"])
+                                )
+                            st.rerun()
 
                 with st.expander("編集"):
                     render_paper_edit_form(
@@ -1667,33 +1669,42 @@ elif menu == "詳細":
                 "-",
                 selected_paper.get("title") or "citation",
             ).strip("-")
-            st.download_button(
-                "参考文献をダウンロード",
-                data=citation_text.encode("utf-8"),
-                file_name=f"{citation_file_name or 'citation'}-{citation_style}.txt",
-                mime="text/plain",
-                key=f"detail_citation_download_{selected_paper['id']}",
-            )
-            bibtex_text = make_bibtex_entry(selected_paper)
-            with st.expander("BibTeX"):
-                st.code(bibtex_text, language="bibtex")
-                st.download_button(
-                    "BibTeXをダウンロード",
-                    data=bibtex_text.encode("utf-8"),
-                    file_name=f"{citation_file_name or 'citation'}.bib",
-                    mime="application/x-bibtex",
-                    key=f"detail_bibtex_download_{selected_paper['id']}",
-                )
-            ris_text = make_ris_entry(selected_paper)
-            with st.expander("RIS"):
-                st.code(ris_text)
-                st.download_button(
-                    "RISをダウンロード",
-                    data=ris_text.encode("utf-8"),
-                    file_name=f"{citation_file_name or 'citation'}.ris",
-                    mime="application/x-research-info-systems",
-                    key=f"detail_ris_download_{selected_paper['id']}",
-                )
+            with st.expander("エクスポート"):
+                export_col1, export_col2, export_col3 = st.columns(3)
+                with export_col1:
+                    st.download_button(
+                        "テキスト",
+                        data=citation_text.encode("utf-8"),
+                        file_name=f"{citation_file_name or 'citation'}-{citation_style}.txt",
+                        mime="text/plain",
+                        key=f"detail_citation_download_{selected_paper['id']}",
+                        use_container_width=True,
+                    )
+                bibtex_text = make_bibtex_entry(selected_paper)
+                with export_col2:
+                    st.download_button(
+                        "BibTeX",
+                        data=bibtex_text.encode("utf-8"),
+                        file_name=f"{citation_file_name or 'citation'}.bib",
+                        mime="application/x-bibtex",
+                        key=f"detail_bibtex_download_{selected_paper['id']}",
+                        use_container_width=True,
+                    )
+                ris_text = make_ris_entry(selected_paper)
+                with export_col3:
+                    st.download_button(
+                        "RIS",
+                        data=ris_text.encode("utf-8"),
+                        file_name=f"{citation_file_name or 'citation'}.ris",
+                        mime="application/x-research-info-systems",
+                        key=f"detail_ris_download_{selected_paper['id']}",
+                        use_container_width=True,
+                    )
+                preview_tab1, preview_tab2 = st.tabs(["BibTeX", "RIS"])
+                with preview_tab1:
+                    st.code(bibtex_text, language="bibtex")
+                with preview_tab2:
+                    st.code(ris_text)
 
             st.subheader("編集")
             render_paper_edit_form(
