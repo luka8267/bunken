@@ -16,6 +16,7 @@ from paper_utils import (
     make_bibtex_entry,
     make_ris_entry,
     make_word_citation,
+    normalize_doi,
     parse_bibtex_entries,
     parse_ris_entries,
     replace_tags_for_paper,
@@ -121,6 +122,13 @@ class PaperUtilsCollectionTests(unittest.TestCase):
 
         self.assertIn("Journal, 12(3), 45-67", citation)
         self.assertIn("https://doi.org/10.1000/example", citation)
+
+    def test_normalize_doi_accepts_url_and_prefix_forms(self):
+        self.assertEqual(
+            normalize_doi("https://doi.org/10.1000/example."),
+            "10.1000/example",
+        )
+        self.assertEqual(normalize_doi("doi: 10.1000/Example"), "10.1000/Example")
 
     def test_make_bibtex_entry_includes_publication_metadata(self):
         entry = make_bibtex_entry(

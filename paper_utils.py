@@ -108,7 +108,13 @@ def normalize_text_db_value(value):
 
 
 def normalize_doi(doi):
-    return (doi or "").strip()
+    text = (doi or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^doi:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE)
+    text = text.strip().strip("<>").rstrip(").,;]")
+    return text
 
 
 def extract_doi_from_text(text):
@@ -1521,11 +1527,11 @@ def sort_papers_dataframe(df, sort_option, added_oldest_first=False):
 
 
 def make_word_citation(row, style="APA"):
-    authors = row.get("authors", "")
+    authors = normalize_author_text(row.get("authors", ""))
     year = row.get("year", "")
     title = row.get("title", "")
     journal = row.get("journal", "")
-    doi = row.get("doi", "")
+    doi = normalize_doi(row.get("doi", ""))
     volume = row.get("volume", "")
     issue = row.get("issue", "")
     pages = row.get("pages", "")
@@ -1572,9 +1578,12 @@ def normalize_bibtex_authors(authors):
     return names
 
 
+def normalize_author_text(authors):
+    return ", ".join(normalize_bibtex_authors(authors))
+
+
 def normalize_bibtex_doi(doi):
-    text = normalize_doi(doi)
-    return re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE)
+    return normalize_doi(doi)
 
 
 def escape_bibtex_value(value):

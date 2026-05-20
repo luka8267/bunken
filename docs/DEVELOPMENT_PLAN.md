@@ -59,6 +59,37 @@ a linked Word add-in.
    - RIS/BibTeX import/export.
    - CSL-based citation formatting when the core flows are stable.
 
+## Phase status
+
+### Phase 1: literature management UI
+
+- Done: list/detail views, filters, smart filters, multi-select, bulk tags,
+  bulk collections, bulk status changes, bulk exports.
+- Next: inline table-like list editing and keyboard-oriented workflows.
+
+### Phase 2: import workflows
+
+- Done: BibTeX import, RIS import, DOI list import, PDF DOI extraction,
+  duplicate preview before import.
+- Next: richer PDF metadata extraction when DOI is not present.
+
+### Phase 3: Word add-in integration
+
+- Done in the add-in: Word-side search, citation insertion, document citation
+  list, bibliography regeneration, style switching, citation context sync.
+- Next: smoke-test each production deployment after web app releases.
+
+### Phase 4: data quality
+
+- Done: DOI normalization, author delimiter normalization for exports,
+  metadata completion from DOI, safer duplicate merge flows.
+- Next: journal-title abbreviation/expansion and CSL-backed formatting.
+
+### Phase 5: operations
+
+- Done: backup runbook and operations runbook.
+- Next: add automated deployment smoke tests and log review checklist per host.
+
 ## Smoke test checklist
 
 Run this before pushing app changes:
@@ -103,4 +134,5 @@ Then verify:
 ## DB change rule
 
 Do not make schema or data changes until a backup has been created and the
-restore path is clear. See `docs/DB_BACKUP_RUNBOOK.md`.
+restore path is clear. See `docs/DB_BACKUP_RUNBOOK.md` and
+`docs/OPERATIONS_RUNBOOK.md`.
