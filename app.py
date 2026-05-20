@@ -605,6 +605,30 @@ def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
             st.error("タグの更新に失敗しました。入力内容とログを確認してください。")
 
 
+def render_paper_pdf_preview(paper, key_prefix="paper"):
+    signed_url = create_pdf_signed_url(supabase, paper.get("pdf_path"), 3600)
+    if not signed_url:
+        st.caption("PDFは添付されていません。")
+        return
+
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.link_button("PDFを開く", signed_url)
+    with col2:
+        st.caption("プレビューURLは一時的な署名付きURLです。")
+
+    with st.expander("PDFプレビュー", expanded=True):
+        preview_height = st.slider(
+            "プレビューの高さ",
+            min_value=400,
+            max_value=1000,
+            value=700,
+            step=50,
+            key=f"{key_prefix}_pdf_preview_height_{paper['id']}",
+        )
+        components.iframe(signed_url, height=preview_height, scrolling=True)
+
+
 def format_duplicate_option_label(paper):
     memo = (paper.get("notes") or "").strip().replace("\n", " ")
     memo_part = f" / メモ: {memo[:60]}" if memo else " / メモなし"
@@ -1591,6 +1615,9 @@ elif menu == "詳細":
                 tag_map=tag_map,
                 citation_usage_map=citation_usage_map,
             )
+
+            st.subheader("PDF")
+            render_paper_pdf_preview(selected_paper, key_prefix="detail")
 
             st.subheader("タグ")
             render_paper_tag_editor(
