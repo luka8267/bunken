@@ -7,12 +7,16 @@ import uuid
 from html.parser import HTMLParser
 from urllib.parse import unquote, urljoin, urlparse
 
-import fitz
 import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from supabase import Client
+
+try:
+    import fitz
+except ImportError:
+    fitz = None
 
 from auth_utils import (
     build_supabase_client,
@@ -844,6 +848,8 @@ def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
+    if fitz is None:
+        raise RuntimeError("PyMuPDF is not installed")
     document = fitz.open(stream=pdf_bytes, filetype="pdf")
     page_count = document.page_count
     safe_page_number = min(max(int(page_number or 1), 1), max(page_count, 1))
@@ -908,6 +914,11 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
     if show_embed:
         if not pdf_bytes:
             st.info("アプリ内表示用のPDFを取得できませんでした。「PDFを開く」またはダウンロードを使ってください。")
+        elif fitz is None:
+            st.info(
+                "この環境ではPDF画像表示用のライブラリを読み込めませんでした。"
+                "「PDFを開く」または「PDFをダウンロード」を使ってください。"
+            )
         else:
             try:
                 page_count, rendered_page, png_bytes = render_pdf_page_png(
