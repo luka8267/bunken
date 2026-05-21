@@ -309,6 +309,69 @@ def get_citation_usage_map_for_display(user_id, papers):
         return {}
 
 
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_list_records_cached(user_id):
+    return fetch_user_papers(supabase, user_id).data or []
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_collections_cached(user_id):
+    return fetch_user_collections(supabase, user_id).data or []
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_collection_papers_cached(user_id, collection_id):
+    return fetch_papers_for_collection(
+        supabase,
+        user_id,
+        collection_id,
+        columns="*",
+    )
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def fetch_collection_counts_cached(collection_ids):
+    return fetch_collection_counts(supabase, list(collection_ids))
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def get_citation_usage_map_for_refs_cached(user_id, reference_ids):
+    reference_texts = {str(reference_id) for reference_id in reference_ids if reference_id}
+    usage_map = {reference_id: [] for reference_id in reference_texts}
+    if not reference_texts:
+        return usage_map
+
+    documents_result = fetch_user_documents(supabase, user_id)
+    for document in documents_result.data or []:
+        citations_result = fetch_document_citations(supabase, document["id"])
+        for citation in citations_result.data or []:
+            for item in citation.get("citation_items") or []:
+                if not isinstance(item, dict):
+                    continue
+                paper_id = str(item.get("paperId") or "")
+                if paper_id not in reference_texts:
+                    continue
+                usage_map.setdefault(paper_id, []).append(
+                    {
+                        "document_title": document.get("title") or "無題",
+                        "citation_text": citation.get("rendered_text") or "",
+                        "context_text": citation.get("context_text") or "",
+                        "reference_number": item.get("referenceNumber"),
+                        "locator": item.get("locator"),
+                        "updated_at": citation.get("updated_at") or "",
+                    }
+                )
+    return usage_map
+
+
+def clear_library_caches():
+    fetch_list_records_cached.clear()
+    fetch_collections_cached.clear()
+    fetch_collection_papers_cached.clear()
+    fetch_collection_counts_cached.clear()
+    get_citation_usage_map_for_refs_cached.clear()
+
+
 def clean_optional_id(value):
     if value is None:
         return None
@@ -1324,11 +1387,9 @@ elif menu == "検索":
 
 elif menu == "一覧":
     user_id = get_current_user_id()
-    result = fetch_user_papers(supabase, user_id)
-    all_records = result.data or []
+    all_records = fetch_list_records_cached(user_id)
     try:
-        collections_result = fetch_user_collections(supabase, user_id)
-        collections = collections_result.data or []
+        collections = fetch_collections_cached(user_id)
     except Exception:
         logger.exception("Failed to fetch collections")
         collections = []
@@ -1368,12 +1429,7 @@ elif menu == "一覧":
         if selected_collection_label != "すべて":
             selected_collection_id = collection_id_by_label[selected_collection_label]
             try:
-                scoped_records = fetch_papers_for_collection(
-                    supabase,
-                    user_id,
-                    selected_collection_id,
-                    columns="*",
-                )
+                scoped_records = fetch_collection_papers_cached(user_id, selected_collection_id)
             except Exception:
                 logger.exception("Failed to fetch papers for selected collection")
                 st.warning("コレクション内の文献取得に失敗しました。全件から絞り込みます。")
@@ -1456,7 +1512,15 @@ elif menu == "一覧":
     else:
         records = df.to_dict(orient="records")
         tag_map = get_tag_map_for_papers(supabase, records)
-        citation_usage_map = get_citation_usage_map_for_display(user_id, records)
+        list_view_mode = st.segmented_control(
+            "表示形式",
+            ["カード", "3ペイン"],
+            default="カード",
+            key="list_view_mode",
+        )
+        citation_usage_map = {}
+        if list_view_mode != "3ペイン":
+            citation_usage_map = get_citation_usage_map_for_display(user_id, records)
         missing_doi_records = [
             record for record in records if not normalize_doi(record.get("doi"))
         ]
@@ -1785,12 +1849,6 @@ elif menu == "一覧":
             else:
                 st.write("DOIメタデータが不足している正規化文献はありません。")
 
-        list_view_mode = st.segmented_control(
-            "表示形式",
-            ["カード", "3ペイン"],
-            default="カード",
-            key="list_view_mode",
-        )
         if list_view_mode == "3ペイン":
             pane_col1, pane_col2, pane_col3 = st.columns([1.1, 1.6, 2.3])
             with pane_col1:
@@ -1807,9 +1865,8 @@ elif menu == "一覧":
                     st.rerun()
 
                 try:
-                    pane_collection_counts = fetch_collection_counts(
-                        supabase,
-                        [collection["id"] for collection in collections],
+                    pane_collection_counts = fetch_collection_counts_cached(
+                        tuple(collection["id"] for collection in collections)
                     )
                 except Exception:
                     logger.exception("Failed to fetch collection counts for list pane")
@@ -2005,6 +2062,7 @@ elif menu == "一覧":
                                             pages=record.get("pages") or "",
                                             publisher=record.get("publisher") or "",
                                         )
+                                        clear_library_caches()
                                         st.success(f"ステータスを{next_status}にしました。")
                                         st.rerun()
                     if record_index >= 80:
@@ -2012,6 +2070,18 @@ elif menu == "一覧":
                         break
 
             selected_list_paper = paper_by_id[selected_list_paper_id]
+            selected_reference_ids = tuple(
+                str(reference_id)
+                for reference_id in (
+                    selected_list_paper.get("id"),
+                    clean_optional_id(selected_list_paper.get("item_id")),
+                )
+                if reference_id is not None
+            )
+            selected_citation_usage_map = get_citation_usage_map_for_refs_cached(
+                user_id,
+                selected_reference_ids,
+            )
             with pane_col3:
                 st.subheader("詳細")
                 quick_tabs = st.tabs(
@@ -2021,7 +2091,7 @@ elif menu == "一覧":
                     render_paper_summary(
                         selected_list_paper,
                         tag_map=tag_map,
-                        citation_usage_map=citation_usage_map,
+                        citation_usage_map=selected_citation_usage_map,
                     )
                     detail_col1, detail_col2 = st.columns(2)
                     with detail_col1:
@@ -2075,6 +2145,7 @@ elif menu == "一覧":
                             pages=selected_list_paper.get("pages") or "",
                             publisher=selected_list_paper.get("publisher") or "",
                         )
+                        clear_library_caches()
                         st.success("読書情報を保存しました。")
                         st.rerun()
                 with quick_tabs[3]:
@@ -2122,7 +2193,7 @@ elif menu == "一覧":
                         )
                 with quick_tabs[5]:
                     usage_entries = get_paper_usage_entries(
-                        citation_usage_map,
+                        selected_citation_usage_map,
                         selected_list_paper,
                     )
                     if not usage_entries:
