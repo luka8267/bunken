@@ -34,7 +34,6 @@ from paper_utils import (
     create_user_paper,
     create_pdf_signed_url,
     delete_collection,
-    delete_document_citation,
     delete_paper,
     delete_pdf_from_storage,
     delete_user_document,
@@ -65,27 +64,24 @@ from paper_utils import (
     merge_duplicate_paper,
     move_paper,
     normalize_doi,
-    normalize_author_list,
-    normalize_journal_title,
     normalize_title_for_match,
     paper_has_document_citation_refs,
     parse_bibtex_entries,
     parse_ris_entries,
     replace_tags_for_paper,
     restore_keeper_from_merge_backup,
-    restore_duplicate_from_merge_backup,
     save_tags_for_paper,
     save_tags_for_item,
     search_user_papers,
     set_paper_collections,
     sort_papers_dataframe,
     update_collection,
-    update_document_citation,
     update_paper_details,
     update_paper_files,
     upload_pdf_to_storage,
     upload_supporting_file_to_storage,
 )
+import paper_utils as paper_utils_module
 
 DOI_FORM_FIELDS = (
     "title",
@@ -126,6 +122,101 @@ IMPORT_REQUIRED_FIELDS = (
 
 supabase: Client = build_supabase_client(SUPABASE_URL, SUPABASE_KEY)
 logger = logging.getLogger(__name__)
+
+
+def normalize_author_list_compat(authors):
+    helper = getattr(paper_utils_module, "normalize_author_list", None)
+    if helper:
+        return helper(authors)
+    names = []
+    for raw_name in re.split(r"\s+and\s+|;|\|", authors or ""):
+        text = re.sub(r"\s+", " ", raw_name or "").strip()
+        if not text:
+            continue
+        if "," in text:
+            family, given = [part.strip() for part in text.split(",", maxsplit=1)]
+            names.append(f"{family}, {given}" if given else family)
+        else:
+            parts = text.split()
+            names.append(f"{parts[-1]}, {' '.join(parts[:-1])}" if len(parts) >= 2 else text)
+    return ", ".join(names)
+
+
+def normalize_journal_title_compat(journal):
+    helper = getattr(paper_utils_module, "normalize_journal_title", None)
+    if helper:
+        return helper(journal)
+    return re.sub(r"\s+", " ", journal or "").strip()
+
+
+def update_document_citation_compat(
+    supabase_client,
+    user_id,
+    citation_id,
+    rendered_text=None,
+    context_text=None,
+    sort_order=None,
+):
+    helper = getattr(paper_utils_module, "update_document_citation", None)
+    if helper:
+        return helper(
+            supabase_client,
+            user_id,
+            citation_id,
+            rendered_text=rendered_text,
+            context_text=context_text,
+            sort_order=sort_order,
+        )
+    fields = {}
+    if rendered_text is not None:
+        fields["rendered_text"] = rendered_text
+    if context_text is not None:
+        fields["context_text"] = context_text
+    if sort_order is not None:
+        fields["sort_order"] = int(sort_order)
+    if not fields:
+        return None
+    return supabase_client.table("document_citations").update(fields).eq("id", citation_id).execute()
+
+
+def delete_document_citation_compat(supabase_client, citation_id):
+    helper = getattr(paper_utils_module, "delete_document_citation", None)
+    if helper:
+        return helper(supabase_client, citation_id)
+    return supabase_client.table("document_citations").delete().eq("id", citation_id).execute()
+
+
+def restore_duplicate_from_merge_backup_compat(supabase_client, user_id, backup):
+    helper = getattr(paper_utils_module, "restore_duplicate_from_merge_backup", None)
+    if helper:
+        return helper(supabase_client, user_id, backup)
+    snapshot = backup.get("duplicate_snapshot") or {}
+    if not snapshot:
+        raise ValueError("復元できる統合元スナップショットがありません。")
+    created = create_user_paper(
+        supabase_client,
+        user_id,
+        snapshot.get("title") or "",
+        snapshot.get("authors") or "",
+        snapshot.get("journal") or "",
+        snapshot.get("year") or 0,
+        normalize_doi(snapshot.get("doi")) or None,
+        snapshot.get("url") or None,
+        snapshot.get("pdf_path") or None,
+        snapshot.get("supporting_path") or None,
+        snapshot.get("status") or "未読",
+        snapshot.get("notes") or "",
+        get_next_display_order(supabase_client, user_id),
+        snapshot.get("volume") or "",
+        snapshot.get("issue") or "",
+        snapshot.get("pages") or "",
+        snapshot.get("publisher") or "",
+        snapshot.get("item_type") or "journalArticle",
+    )
+    return {
+        "restored_table": "items" if created.get("item_id") else "papers",
+        "restored_id": created["id"],
+    }
 
 
 def promote_url_fragment_to_query_params():
@@ -3510,8 +3601,8 @@ elif menu == "重複確認":
     with st.expander("データ品質チェック", expanded=False):
         quality_rows = []
         for paper in papers:
-            normalized_authors = normalize_author_list(paper.get("authors"))
-            normalized_journal = normalize_journal_title(paper.get("journal"))
+            normalized_authors = normalize_author_list_compat(paper.get("authors"))
+            normalized_journal = normalize_journal_title_compat(paper.get("journal"))
             changes = []
             if normalized_authors and normalized_authors != (paper.get("authors") or ""):
                 changes.append("著者")
@@ -3684,7 +3775,7 @@ elif menu == "重複確認":
                             st.error("確認文字列が一致しません。")
                         else:
                             try:
-                                restore_result = restore_duplicate_from_merge_backup(
+                                restore_result = restore_duplicate_from_merge_backup_compat(
                                     supabase,
                                     user_id,
                                     backup,
@@ -4129,7 +4220,7 @@ elif menu == "文書引用":
                                 key=f"save_document_citation_{citation['id']}",
                                 use_container_width=True,
                             ):
-                                update_document_citation(
+                                update_document_citation_compat(
                                     supabase,
                                     user_id,
                                     citation["id"],
@@ -4150,7 +4241,7 @@ elif menu == "文書引用":
                                 disabled=delete_confirm != "削除",
                                 use_container_width=True,
                             ):
-                                delete_document_citation(supabase, citation["id"])
+                                delete_document_citation_compat(supabase, citation["id"])
                                 st.success("アプリ側の引用行を削除しました。Word本文は削除されません。")
                                 st.rerun()
                     st.divider()
