@@ -1887,6 +1887,35 @@ def extract_doi_from_pdf_bytes(pdf_bytes):
         return ""
 
 
+def extract_title_from_pdf_bytes(pdf_bytes):
+    if PdfReader is None:
+        return ""
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        metadata_title = (reader.metadata or {}).get("/Title") or ""
+        metadata_title = re.sub(r"\s+", " ", str(metadata_title)).strip()
+        if metadata_title and len(metadata_title) >= 8:
+            return metadata_title
+
+        first_page_text = reader.pages[0].extract_text() if reader.pages else ""
+    except Exception:
+        return ""
+
+    candidates = []
+    for raw_line in (first_page_text or "").splitlines()[:30]:
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if len(line) < 12 or DOI_RE.search(line):
+            continue
+        if re.search(r"^(abstract|keywords|introduction|references)\b", line, re.I):
+            continue
+        if re.search(r"^(journal|volume|copyright|received|accepted)\b", line, re.I):
+            continue
+        candidates.append(line)
+    if not candidates:
+        return ""
+    return max(candidates[:8], key=len)[:300]
+
+
 def export_to_word_bytes(papers):
     doc = Document()
     doc.add_heading("参考文献", 0)

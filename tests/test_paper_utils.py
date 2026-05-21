@@ -1,3 +1,4 @@
+import io
 import unittest
 
 import pandas as pd
@@ -9,6 +10,7 @@ from paper_utils import (
     delete_user_document,
     export_to_bibtex_text,
     export_to_ris_text,
+    extract_title_from_pdf_bytes,
     fetch_collection_counts,
     fetch_duplicate_merge_backups,
     fetch_paper_collection_ids,
@@ -26,6 +28,7 @@ from paper_utils import (
     strip_metadata_columns,
     update_paper_details,
 )
+from pypdf import PdfWriter
 
 
 class Result:
@@ -237,6 +240,18 @@ ER  -
         self.assertEqual(entries[0]["title"], "Metadata Test")
         self.assertEqual(entries[0]["authors"], "Alpha, Beta")
         self.assertEqual(entries[0]["doi"], "10.1000/example")
+
+    def test_extract_title_from_pdf_metadata(self):
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        writer.add_metadata({"/Title": "A Useful PDF Title"})
+        buffer = io.BytesIO()
+        writer.write(buffer)
+
+        self.assertEqual(
+            extract_title_from_pdf_bytes(buffer.getvalue()),
+            "A Useful PDF Title",
+        )
 
     def test_added_order_defaults_to_newest_first(self):
         df = pd.DataFrame(

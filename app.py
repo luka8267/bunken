@@ -41,6 +41,7 @@ from paper_utils import (
     export_to_ris_text,
     export_to_word_bytes,
     extract_doi_from_pdf_bytes,
+    extract_title_from_pdf_bytes,
     fetch_collection_counts,
     fetch_document_citations,
     fetch_paper_collection_ids,
@@ -109,6 +110,14 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 MAX_METADATA_REDIRECTS = 3
 METADATA_FETCH_BYTES = 300000
+READING_NOTE_MARKER = "--- 読書メモ ---"
+CITATION_NOTE_MARKER = "--- 引用予定メモ ---"
+IMPORT_REQUIRED_FIELDS = (
+    ("title", "タイトル"),
+    ("authors", "著者"),
+    ("year", "年"),
+    ("doi", "DOI"),
+)
 
 supabase: Client = build_supabase_client(SUPABASE_URL, SUPABASE_KEY)
 logger = logging.getLogger(__name__)
@@ -393,6 +402,41 @@ def clean_optional_id(value):
     return text or None
 
 
+def split_structured_notes(notes):
+    text = notes or ""
+    reading = ""
+    citation = ""
+    base = text
+    if READING_NOTE_MARKER in base:
+        base, reading_part = base.split(READING_NOTE_MARKER, 1)
+        if CITATION_NOTE_MARKER in reading_part:
+            reading, citation = reading_part.split(CITATION_NOTE_MARKER, 1)
+        else:
+            reading = reading_part
+    elif CITATION_NOTE_MARKER in base:
+        base, citation = base.split(CITATION_NOTE_MARKER, 1)
+    return {
+        "base": base.strip(),
+        "reading": reading.strip(),
+        "citation": citation.strip(),
+    }
+
+
+def combine_structured_notes(base_note, reading_note="", citation_note=""):
+    parts = []
+    if (base_note or "").strip():
+        parts.append(base_note.strip())
+    if (reading_note or "").strip():
+        parts.append(f"{READING_NOTE_MARKER}\n{reading_note.strip()}")
+    if (citation_note or "").strip():
+        parts.append(f"{CITATION_NOTE_MARKER}\n{citation_note.strip()}")
+    return "\n\n".join(parts)
+
+
+def get_citation_planned_note(paper):
+    return split_structured_notes(paper.get("notes")).get("citation", "")
+
+
 def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=None):
     paper_url = normalize_url(paper.get("url"))
     signed_url = create_pdf_signed_url(supabase, paper.get("pdf_path"), 3600)
@@ -425,8 +469,16 @@ def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=
     if paper.get("status"):
         st.write(f"ステータス: {paper.get('status')}")
     if paper.get("notes"):
-        st.write("メモ:")
-        st.write(paper["notes"])
+        notes_parts = split_structured_notes(paper.get("notes"))
+        if notes_parts["base"]:
+            st.write("メモ:")
+            st.write(notes_parts["base"])
+        if notes_parts["reading"]:
+            st.write("読書メモ:")
+            st.write(notes_parts["reading"])
+        if notes_parts["citation"]:
+            st.write("引用予定メモ:")
+            st.write(notes_parts["citation"])
 
     attachments = []
     if signed_url:
@@ -696,7 +748,29 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
     signed_url = create_pdf_signed_url(supabase, paper.get("pdf_path"), 3600)
     if not signed_url:
         st.caption("PDFは添付されていません。")
+        st.caption("編集タブからPDFを追加できます。")
         return
+
+    page_key = f"{key_prefix}_pdf_page_{paper['id']}"
+    zoom_key = f"{key_prefix}_pdf_zoom_{paper['id']}"
+    height_key = f"{key_prefix}_pdf_height_{paper['id']}"
+    show_key = f"{key_prefix}_pdf_embed_{paper['id']}"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 1
+    if zoom_key not in st.session_state:
+        st.session_state[zoom_key] = 110
+    if height_key not in st.session_state:
+        st.session_state[height_key] = 760
+
+    control_col1, control_col2, control_col3, control_col4 = st.columns([1, 1, 1, 1.2])
+    with control_col1:
+        st.number_input("ページ", min_value=1, step=1, key=page_key)
+    with control_col2:
+        st.slider("拡大率", 60, 200, key=zoom_key)
+    with control_col3:
+        st.slider("高さ", 420, 1100, key=height_key)
+    with control_col4:
+        show_embed = st.toggle("アプリ内表示", value=True, key=show_key)
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -719,7 +793,103 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
                 use_container_width=True,
             )
 
-    st.caption("Chromeのブロックを避けるため、アプリ内PDF埋め込みは無効にしています。")
+    if show_embed:
+        viewer_url = f"{signed_url}#page={st.session_state[page_key]}&zoom={st.session_state[zoom_key]}"
+        components.html(
+            f"""
+            <iframe
+                src="{viewer_url}"
+                style="width: 100%; height: {st.session_state[height_key]}px; border: 1px solid #d0d7de; border-radius: 8px;"
+                title="PDF viewer">
+            </iframe>
+            """,
+            height=int(st.session_state[height_key]) + 20,
+        )
+        st.caption("環境によってPDFが埋め込み表示できない場合は「PDFを開く」を使ってください。")
+
+
+def render_reading_workflow(paper, user_id, key_prefix="reading"):
+    row_dict = dict(paper)
+    notes_parts = split_structured_notes(row_dict.get("notes"))
+    current_status = row_dict.get("status")
+    status_index = (
+        READING_STATUSES.index(current_status)
+        if current_status in READING_STATUSES
+        else 0
+    )
+    status_col1, status_col2, status_col3 = st.columns(3)
+    for index, next_status in enumerate(("読書中", "読了", "引用予定")):
+        with (status_col1, status_col2, status_col3)[index]:
+            if st.button(
+                next_status,
+                key=f"{key_prefix}_quick_{row_dict['id']}_{next_status}",
+                disabled=current_status == next_status,
+                use_container_width=True,
+            ):
+                update_paper_details(
+                    supabase,
+                    user_id,
+                    row_dict["id"],
+                    next_status,
+                    row_dict.get("notes") or "",
+                    normalize_url(row_dict.get("url")) or None,
+                    item_id=clean_optional_id(row_dict.get("item_id")),
+                    doi=normalize_doi(row_dict.get("doi")),
+                    volume=row_dict.get("volume") or "",
+                    issue=row_dict.get("issue") or "",
+                    pages=row_dict.get("pages") or "",
+                    publisher=row_dict.get("publisher") or "",
+                )
+                clear_library_caches()
+                st.success(f"ステータスを{next_status}にしました。")
+                st.rerun()
+
+    edit_status = st.selectbox(
+        "読書ステータス",
+        READING_STATUSES,
+        index=status_index,
+        key=f"{key_prefix}_status_{row_dict['id']}",
+    )
+    base_note = st.text_area(
+        "基本メモ",
+        value=notes_parts["base"],
+        height=100,
+        key=f"{key_prefix}_base_note_{row_dict['id']}",
+    )
+    reading_note = st.text_area(
+        "PDF読書メモ",
+        value=notes_parts["reading"],
+        height=170,
+        key=f"{key_prefix}_reading_note_{row_dict['id']}",
+    )
+    citation_note = st.text_area(
+        "引用予定メモ",
+        value=notes_parts["citation"],
+        height=120,
+        key=f"{key_prefix}_citation_note_{row_dict['id']}",
+    )
+    if st.button(
+        "読書メモを保存",
+        key=f"{key_prefix}_save_{row_dict['id']}",
+        use_container_width=True,
+    ):
+        update_paper_details(
+            supabase,
+            user_id,
+            row_dict["id"],
+            edit_status,
+            combine_structured_notes(base_note, reading_note, citation_note),
+            normalize_url(row_dict.get("url")) or None,
+            item_id=clean_optional_id(row_dict.get("item_id")),
+            doi=normalize_doi(row_dict.get("doi")),
+            volume=row_dict.get("volume") or "",
+            issue=row_dict.get("issue") or "",
+            pages=row_dict.get("pages") or "",
+            publisher=row_dict.get("publisher") or "",
+        )
+        clear_library_caches()
+        st.success("読書メモを保存しました。")
+        st.rerun()
 
 
 def format_duplicate_option_label(paper):
@@ -982,7 +1152,19 @@ def normalize_import_candidate(candidate):
         "issue": candidate.get("issue") or "",
         "pages": candidate.get("pages") or "",
         "publisher": candidate.get("publisher") or "",
+        "import_error": candidate.get("import_error") or "",
     }
+
+
+def format_import_missing_fields(candidate):
+    missing = []
+    for field, label in IMPORT_REQUIRED_FIELDS:
+        if field == "doi":
+            if not normalize_doi(candidate.get(field)):
+                missing.append(label)
+        elif not candidate.get(field):
+            missing.append(label)
+    return " / ".join(missing)
 
 
 def find_import_duplicate(candidate, existing_records):
@@ -1055,6 +1237,94 @@ def create_imported_paper(candidate, user_id, tags_text="", pdf_file=None):
     return created_paper
 
 
+def update_existing_paper_from_import(existing_record, candidate, user_id, pdf_file=None):
+    normalized = normalize_import_candidate(candidate)
+    item_id = clean_optional_id(existing_record.get("item_id"))
+    if item_id:
+        item_result = (
+            supabase.table("items")
+            .select("extra")
+            .eq("id", item_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        extra = (item_result.data or [{}])[0].get("extra") or {}
+        extra["legacy_status"] = existing_record.get("status") or "未読"
+        item_fields = {
+            "title": normalized["title"] or existing_record.get("title") or "",
+            "publication_title": normalized["journal"] or existing_record.get("journal") or "",
+            "year": normalize_import_year(normalized["year"] or existing_record.get("year")),
+            "doi": normalized["doi"] or normalize_doi(existing_record.get("doi")) or None,
+            "url": normalized["url"] or normalize_url(existing_record.get("url")) or None,
+            "abstract_note": existing_record.get("notes") or "",
+            "extra": extra,
+            "volume": normalized["volume"] or existing_record.get("volume") or None,
+            "issue": normalized["issue"] or existing_record.get("issue") or None,
+            "pages": normalized["pages"] or existing_record.get("pages") or None,
+            "publisher": normalized["publisher"] or existing_record.get("publisher") or None,
+        }
+        (
+            supabase.table("items")
+            .update(item_fields)
+            .eq("id", item_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if normalized["authors"]:
+            (
+                supabase.table("creators")
+                .delete()
+                .eq("item_id", item_id)
+                .execute()
+            )
+            for position, name in enumerate(
+                [name.strip() for name in normalized["authors"].split(",") if name.strip()],
+                start=1,
+            ):
+                (
+                    supabase.table("creators")
+                    .insert(
+                        {
+                            "item_id": item_id,
+                            "creator_type": "author",
+                            "literal_name": name,
+                            "position": position,
+                        }
+                    )
+                    .execute()
+                )
+    else:
+        (
+            supabase.table("papers")
+            .update(
+                {
+                    "title": normalized["title"] or existing_record.get("title") or "",
+                    "authors": normalized["authors"] or existing_record.get("authors") or "",
+                    "journal": normalized["journal"] or existing_record.get("journal") or "",
+                    "year": normalize_import_year(normalized["year"] or existing_record.get("year")),
+                    "doi": normalized["doi"] or normalize_doi(existing_record.get("doi")) or None,
+                    "url": normalized["url"] or normalize_url(existing_record.get("url")) or None,
+                    "status": existing_record.get("status") or "未読",
+                    "notes": existing_record.get("notes") or "",
+                }
+            )
+            .eq("id", existing_record["id"])
+            .eq("user_id", user_id)
+            .execute()
+        )
+    if pdf_file and not existing_record.get("pdf_path"):
+        pdf_path = upload_pdf_to_storage(supabase, pdf_file, user_id)
+        update_paper_files(
+            supabase,
+            user_id,
+            existing_record["id"],
+            pdf_path=pdf_path,
+            supporting_path=None,
+            item_id=item_id,
+        )
+
+
 def render_import_candidates(candidates, existing_records, key_prefix, pdf_files=None):
     normalized_candidates = [normalize_import_candidate(candidate) for candidate in candidates]
     if not normalized_candidates:
@@ -1073,48 +1343,117 @@ def render_import_candidates(candidates, existing_records, key_prefix, pdf_files
                 "番号": index,
                 "タイトル": candidate["title"],
                 "著者": candidate["authors"],
+                "雑誌": candidate["journal"],
                 "年": candidate["year"],
                 "DOI": candidate["doi"],
+                "URL": candidate["url"],
+                "巻": candidate["volume"],
+                "号": candidate["issue"],
+                "ページ": candidate["pages"],
+                "出版社": candidate["publisher"],
+                "不足項目": format_import_missing_fields(candidate),
+                "取得状況": candidate.get("import_error") or "OK",
                 "判定": duplicate.get("label", ""),
                 "信頼度": duplicate.get("confidence", ""),
                 "既存ID": duplicate.get("existing_id", ""),
+                "重複時の処理": "スキップ" if duplicate else "追加",
             }
         )
-    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
+    edited_rows = st.data_editor(
+        pd.DataFrame(preview_rows),
+        hide_index=True,
+        use_container_width=True,
+        disabled=["番号", "不足項目", "取得状況", "判定", "信頼度", "既存ID"],
+        column_config={
+            "重複時の処理": st.column_config.SelectboxColumn(
+                "重複時の処理",
+                options=["スキップ", "既存を更新", "別文献として追加", "追加"],
+            )
+        },
+        key=f"{key_prefix}_editor",
+    )
     duplicate_count = sum(1 for duplicate in duplicate_details if duplicate)
     if duplicate_count:
         st.warning(
-            f"{duplicate_count}件に重複候補があります。内容を確認してからインポートしてください。"
+            f"{duplicate_count}件に重複候補があります。スキップ、既存を更新、別文献として追加を選べます。"
         )
+        compare_rows = []
+        existing_by_id = {str(record.get("id")): record for record in existing_records}
+        for row in preview_rows:
+            existing = existing_by_id.get(str(row.get("既存ID") or ""))
+            if not existing:
+                continue
+            compare_rows.append(
+                {
+                    "番号": row["番号"],
+                    "既存タイトル": existing.get("title") or "",
+                    "取込タイトル": row["タイトル"],
+                    "既存DOI": normalize_doi(existing.get("doi")),
+                    "取込DOI": row["DOI"],
+                    "既存年": existing.get("year") or "",
+                    "取込年": row["年"],
+                }
+            )
+        if compare_rows:
+            with st.expander("既存文献との差分を確認"):
+                st.dataframe(pd.DataFrame(compare_rows), hide_index=True, use_container_width=True)
 
     import_tags = st.text_input(
         "インポート時に追加するタグ（任意・カンマ区切り）",
         key=f"{key_prefix}_tags",
     )
-    skip_duplicates = st.checkbox(
-        "重複候補をスキップ",
-        value=True,
-        key=f"{key_prefix}_skip_duplicates",
-    )
     if st.button("候補をインポート", key=f"{key_prefix}_apply"):
         imported_count = 0
         skipped_count = 0
-        for index, candidate in enumerate(normalized_candidates):
-            if skip_duplicates and duplicate_details[index]:
+        updated_count = 0
+        failed_count = 0
+        existing_by_id = {str(record.get("id")): record for record in existing_records}
+        edited_records = edited_rows.to_dict(orient="records")
+        for index, row in enumerate(edited_records):
+            action = row.get("重複時の処理") or "追加"
+            duplicate = duplicate_details[index]
+            if row.get("取得状況") and row.get("取得状況") != "OK" and not row.get("タイトル"):
+                failed_count += 1
+                continue
+            if duplicate and action == "スキップ":
                 skipped_count += 1
                 continue
+            candidate = {
+                "title": row.get("タイトル") or "",
+                "authors": row.get("著者") or "",
+                "journal": row.get("雑誌") or "",
+                "year": row.get("年") or 0,
+                "doi": row.get("DOI") or "",
+                "url": row.get("URL") or "",
+                "volume": row.get("巻") or "",
+                "issue": row.get("号") or "",
+                "pages": row.get("ページ") or "",
+                "publisher": row.get("出版社") or "",
+            }
             if not candidate["title"] and not candidate["doi"]:
                 skipped_count += 1
                 continue
-            create_imported_paper(
-                candidate,
-                get_current_user_id(),
-                tags_text=import_tags,
-                pdf_file=(pdf_files[index] if pdf_files and index < len(pdf_files) else None),
-            )
-            imported_count += 1
+            pdf_file = pdf_files[index] if pdf_files and index < len(pdf_files) else None
+            if duplicate and action == "既存を更新":
+                existing = existing_by_id.get(str(duplicate.get("existing_id") or ""))
+                if not existing:
+                    failed_count += 1
+                    continue
+                update_existing_paper_from_import(existing, candidate, get_current_user_id(), pdf_file=pdf_file)
+                updated_count += 1
+            else:
+                create_imported_paper(
+                    candidate,
+                    get_current_user_id(),
+                    tags_text=import_tags,
+                    pdf_file=pdf_file,
+                )
+                imported_count += 1
         clear_library_caches()
-        st.success(f"インポートしました: {imported_count}件 / スキップ {skipped_count}件")
+        st.success(
+            f"インポートしました: 追加 {imported_count}件 / 更新 {updated_count}件 / "
+            f"スキップ {skipped_count}件 / 失敗 {failed_count}件"
+        )
         st.rerun()
 
 
@@ -1273,7 +1612,18 @@ st.title("📚 文献管理アプリ")
 post_action_warning = st.session_state.pop("post_action_warning", None)
 if post_action_warning:
     st.warning(post_action_warning)
-MENU_OPTIONS = ["追加", "検索", "一覧", "詳細", "インポート", "タグ検索", "コレクション", "重複確認", "文書引用"]
+MENU_OPTIONS = [
+    "追加",
+    "検索",
+    "一覧",
+    "詳細",
+    "PDF読書",
+    "インポート",
+    "タグ検索",
+    "コレクション",
+    "重複確認",
+    "文書引用",
+]
 if st.session_state.get("active_menu") not in MENU_OPTIONS:
     st.session_state["active_menu"] = "追加"
 menu = st.sidebar.selectbox(
@@ -2200,42 +2550,11 @@ elif menu == "一覧":
                 with quick_tabs[1]:
                     render_paper_pdf_preview(selected_list_paper, key_prefix="list_pane")
                 with quick_tabs[2]:
-                    quick_status = st.selectbox(
-                        "読書ステータス",
-                        READING_STATUSES,
-                        index=READING_STATUSES.index(selected_list_paper.get("status"))
-                        if selected_list_paper.get("status") in READING_STATUSES
-                        else 0,
-                        key=f"list_pane_status_{selected_list_paper['id']}",
+                    render_reading_workflow(
+                        selected_list_paper,
+                        user_id,
+                        key_prefix="list_pane_reading",
                     )
-                    quick_notes = st.text_area(
-                        "メモ",
-                        value=selected_list_paper.get("notes") or "",
-                        height=160,
-                        key=f"list_pane_notes_{selected_list_paper['id']}",
-                    )
-                    if st.button(
-                        "読書情報を保存",
-                        key=f"list_pane_save_reading_{selected_list_paper['id']}",
-                        use_container_width=True,
-                    ):
-                        update_paper_details(
-                            supabase,
-                            user_id,
-                            selected_list_paper["id"],
-                            quick_status,
-                            quick_notes,
-                            normalize_url(selected_list_paper.get("url")) or None,
-                            item_id=clean_optional_id(selected_list_paper.get("item_id")),
-                            doi=normalize_doi(selected_list_paper.get("doi")),
-                            volume=selected_list_paper.get("volume") or "",
-                            issue=selected_list_paper.get("issue") or "",
-                            pages=selected_list_paper.get("pages") or "",
-                            publisher=selected_list_paper.get("publisher") or "",
-                        )
-                        clear_library_caches()
-                        st.success("読書情報を保存しました。")
-                        st.rerun()
                 with quick_tabs[3]:
                     render_paper_tag_editor(
                         selected_list_paper,
@@ -2330,8 +2649,16 @@ elif menu == "一覧":
                     st.write(f"ステータス: {row_dict['status']}")
 
                 if row_dict.get("notes"):
-                    st.write("メモ:")
-                    st.write(row_dict["notes"])
+                    notes_parts = split_structured_notes(row_dict.get("notes"))
+                    if notes_parts["base"]:
+                        st.write("メモ:")
+                        st.write(notes_parts["base"])
+                    if notes_parts["reading"]:
+                        st.write("読書メモ:")
+                        st.write(notes_parts["reading"])
+                    if notes_parts["citation"]:
+                        st.write("引用予定メモ:")
+                        st.write(notes_parts["citation"])
 
                 attachments = []
                 if signed_url:
@@ -2567,8 +2894,8 @@ elif menu == "詳細":
             tag_map = get_tag_map_for_papers(supabase, [selected_paper])
             citation_usage_map = get_citation_usage_map_for_display(user_id, [selected_paper])
 
-            info_tab, pdf_tab, tags_tab, citation_tab, edit_tab = st.tabs(
-                ["概要", "PDF", "タグ", "引用", "編集"]
+            info_tab, pdf_tab, reading_tab, tags_tab, citation_tab, edit_tab = st.tabs(
+                ["概要", "PDF", "読書", "タグ", "引用", "編集"]
             )
             with info_tab:
                 render_paper_summary(
@@ -2579,6 +2906,9 @@ elif menu == "詳細":
 
             with pdf_tab:
                 render_paper_pdf_preview(selected_paper, key_prefix="detail")
+
+            with reading_tab:
+                render_reading_workflow(selected_paper, user_id, key_prefix="detail_reading")
 
             with tags_tab:
                 render_paper_tag_editor(
@@ -2650,13 +2980,96 @@ elif menu == "詳細":
                 )
 
 
+elif menu == "PDF読書":
+    user_id = get_current_user_id()
+    st.header("PDF読書")
+    try:
+        result = fetch_user_papers(
+            supabase,
+            user_id,
+            columns=(
+                "id, item_id, title, authors, journal, year, doi, url, volume, issue, "
+                "pages, publisher, item_type, status, notes, pdf_path, supporting_path, display_order"
+            ),
+        )
+        pdf_papers = [paper for paper in (result.data or []) if paper.get("pdf_path")]
+    except Exception:
+        logger.exception("Failed to fetch papers for PDF reading")
+        st.error("PDF付き文献を取得できませんでした。")
+        st.stop()
+
+    if not pdf_papers:
+        st.write("PDF付き文献はまだありません。一覧または詳細の編集タブからPDFを追加できます。")
+    else:
+        read_filter_col, sort_col = st.columns([1, 1])
+        with read_filter_col:
+            reading_filter = st.selectbox(
+                "読書ステータス",
+                ["すべて"] + READING_STATUSES,
+                key="pdf_reading_status_filter",
+            )
+        with sort_col:
+            pdf_sort = st.selectbox(
+                "並び替え",
+                SORT_OPTIONS,
+                key="pdf_reading_sort",
+            )
+        if reading_filter != "すべて":
+            pdf_papers = [
+                paper for paper in pdf_papers if (paper.get("status") or "") == reading_filter
+            ]
+        if pdf_papers:
+            pdf_papers = sort_papers_dataframe(
+                pd.DataFrame(pdf_papers),
+                pdf_sort,
+            ).to_dict(orient="records")
+
+        if not pdf_papers:
+            st.write("条件に一致するPDF付き文献はありません。")
+        else:
+            paper_by_id = {str(paper["id"]): paper for paper in pdf_papers}
+            paper_ids = list(paper_by_id.keys())
+            if st.session_state.get("pdf_reading_selected_paper_id") not in paper_by_id:
+                st.session_state["pdf_reading_selected_paper_id"] = paper_ids[0]
+
+            def format_pdf_reading_option(paper_id):
+                paper = paper_by_id[paper_id]
+                return (
+                    f"{paper.get('title') or '無題'} / "
+                    f"{paper.get('journal') or '雑誌未設定'} / "
+                    f"{paper.get('year') or '-'}"
+                )
+
+            selected_pdf_paper_id = st.selectbox(
+                "読む文献",
+                paper_ids,
+                format_func=format_pdf_reading_option,
+                key="pdf_reading_selected_paper_id",
+            )
+            selected_pdf_paper = paper_by_id[selected_pdf_paper_id]
+            reader_col, note_col = st.columns([1.7, 1])
+            with reader_col:
+                st.subheader(selected_pdf_paper.get("title") or "無題")
+                render_paper_pdf_preview(selected_pdf_paper, key_prefix="pdf_reading")
+            with note_col:
+                st.subheader("読書メモ")
+                render_reading_workflow(
+                    selected_pdf_paper,
+                    user_id,
+                    key_prefix="pdf_reading_workflow",
+                )
+
+
 elif menu == "インポート":
     user_id = get_current_user_id()
     st.header("インポート")
     existing_result = fetch_user_papers(
         supabase,
         user_id,
-        columns="id, item_id, title, year, doi",
+        columns=(
+            "id, item_id, title, authors, journal, year, doi, url, volume, issue, "
+            "pages, publisher, status, notes, pdf_path"
+        ),
     )
     existing_records = existing_result.data or []
 
@@ -2716,6 +3129,18 @@ elif menu == "インポート":
             for line in doi_text.splitlines()
             if (extract_doi(line) or normalize_doi(line))
         ]
+        invalid_doi_lines = [
+            line.strip()
+            for line in doi_text.splitlines()
+            if line.strip() and not (extract_doi(line) or normalize_doi(line))
+        ]
+        if invalid_doi_lines:
+            st.warning("DOIとして読めない行があります。")
+            st.dataframe(
+                pd.DataFrame({"入力行": invalid_doi_lines, "理由": "DOI形式ではありません"}),
+                hide_index=True,
+                use_container_width=True,
+            )
         doi_candidates = []
         if doi_values:
             with st.spinner("Crossrefからメタデータを取得しています..."):
@@ -2736,7 +3161,12 @@ elif menu == "インポート":
                             }
                         )
                     else:
-                        doi_candidates.append({"doi": doi})
+                        doi_candidates.append(
+                            {
+                                "doi": doi,
+                                "import_error": "Crossrefからメタデータを取得できませんでした",
+                            }
+                        )
         render_import_candidates(
             doi_candidates,
             existing_records,
@@ -2756,6 +3186,7 @@ elif menu == "インポート":
                 for pdf_file in pdf_files:
                     pdf_bytes = pdf_file.getvalue()
                     doi = extract_doi_from_pdf_bytes(pdf_bytes)
+                    extracted_title = extract_title_from_pdf_bytes(pdf_bytes)
                     if doi:
                         metadata = fetch_doi(doi)
                         if metadata:
@@ -2773,9 +3204,20 @@ elif menu == "インポート":
                                 }
                             )
                         else:
-                            pdf_candidates.append({"title": pdf_file.name, "doi": doi})
+                            pdf_candidates.append(
+                                {
+                                    "title": extracted_title or pdf_file.name,
+                                    "doi": doi,
+                                    "import_error": "DOIは見つかりましたがCrossref取得に失敗しました",
+                                }
+                            )
                     else:
-                        pdf_candidates.append({"title": pdf_file.name})
+                        pdf_candidates.append(
+                            {
+                                "title": extracted_title or pdf_file.name,
+                                "import_error": "PDFからDOIを抽出できませんでした",
+                            }
+                        )
         render_import_candidates(
             pdf_candidates,
             existing_records,
