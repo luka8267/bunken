@@ -15,12 +15,15 @@ from paper_utils import (
     fetch_duplicate_merge_backups,
     fetch_paper_collection_ids,
     filter_document_citations,
+    find_duplicate_paper_groups,
     get_document_citation_usage_map,
     get_tag_map_for_papers,
     make_bibtex_entry,
     make_ris_entry,
     make_word_citation,
     normalize_doi,
+    normalize_author_list,
+    normalize_journal_title,
     parse_bibtex_entries,
     parse_ris_entries,
     replace_tags_for_paper,
@@ -138,6 +141,26 @@ class PaperUtilsCollectionTests(unittest.TestCase):
             "10.1021/jacs.5b08424",
         )
         self.assertEqual(normalize_doi("doi: 10.1000/Example"), "10.1000/Example")
+
+    def test_author_and_journal_normalization(self):
+        self.assertEqual(
+            normalize_author_list("Jane Smith and Alpha, Beta"),
+            "Smith, Jane, Alpha, Beta",
+        )
+        self.assertEqual(
+            normalize_journal_title("J Am Chem Soc"),
+            "Journal of the American Chemical Society",
+        )
+
+    def test_duplicate_groups_include_title_author_match_without_year(self):
+        groups = find_duplicate_paper_groups(
+            [
+                {"id": "p1", "title": "Same Title", "authors": "Jane Smith", "year": 2024},
+                {"id": "p2", "title": "Same Title", "authors": "Smith, Jane", "year": 2025},
+            ]
+        )
+
+        self.assertTrue(any(group["reason"] == "タイトル+著者" for group in groups))
 
     def test_make_bibtex_entry_includes_publication_metadata(self):
         entry = make_bibtex_entry(

@@ -34,6 +34,7 @@ from paper_utils import (
     create_user_paper,
     create_pdf_signed_url,
     delete_collection,
+    delete_document_citation,
     delete_paper,
     delete_pdf_from_storage,
     delete_user_document,
@@ -64,18 +65,22 @@ from paper_utils import (
     merge_duplicate_paper,
     move_paper,
     normalize_doi,
+    normalize_author_list,
+    normalize_journal_title,
     normalize_title_for_match,
     paper_has_document_citation_refs,
     parse_bibtex_entries,
     parse_ris_entries,
     replace_tags_for_paper,
     restore_keeper_from_merge_backup,
+    restore_duplicate_from_merge_backup,
     save_tags_for_paper,
     save_tags_for_item,
     search_user_papers,
     set_paper_collections,
     sort_papers_dataframe,
     update_collection,
+    update_document_citation,
     update_paper_details,
     update_paper_files,
     upload_pdf_to_storage,
@@ -3502,6 +3507,79 @@ elif menu == "重複確認":
     papers = result.data or []
     duplicate_groups = find_duplicate_paper_groups(papers)
 
+    with st.expander("データ品質チェック", expanded=False):
+        quality_rows = []
+        for paper in papers:
+            normalized_authors = normalize_author_list(paper.get("authors"))
+            normalized_journal = normalize_journal_title(paper.get("journal"))
+            changes = []
+            if normalized_authors and normalized_authors != (paper.get("authors") or ""):
+                changes.append("著者")
+            if normalized_journal and normalized_journal != (paper.get("journal") or ""):
+                changes.append("雑誌名")
+            if changes:
+                quality_rows.append(
+                    {
+                        "id": paper.get("id"),
+                        "タイトル": paper.get("title") or "無題",
+                        "変更項目": " / ".join(changes),
+                        "現在の著者": paper.get("authors") or "",
+                        "正規化著者": normalized_authors,
+                        "現在の雑誌": paper.get("journal") or "",
+                        "正規化雑誌": normalized_journal,
+                    }
+                )
+
+        if not quality_rows:
+            st.write("著者名・雑誌名の正規化候補はありません。")
+        else:
+            st.caption("著者名は「姓, 名」形式、雑誌名は既知の略称を正式名へ寄せます。")
+            quality_df = pd.DataFrame(quality_rows)
+            edited_quality_df = st.data_editor(
+                quality_df.assign(適用=False),
+                hide_index=True,
+                use_container_width=True,
+                disabled=[
+                    "id",
+                    "タイトル",
+                    "変更項目",
+                    "現在の著者",
+                    "正規化著者",
+                    "現在の雑誌",
+                    "正規化雑誌",
+                ],
+                key="quality_normalization_editor",
+            )
+            if st.button("選択した正規化を適用", key="apply_quality_normalization"):
+                updated_count = 0
+                paper_by_id = {str(paper.get("id")): paper for paper in papers}
+                for row in edited_quality_df.to_dict(orient="records"):
+                    if not row.get("適用"):
+                        continue
+                    paper = paper_by_id.get(str(row.get("id")))
+                    if not paper:
+                        continue
+                    update_existing_paper_from_import(
+                        paper,
+                        {
+                            "title": paper.get("title") or "",
+                            "authors": row.get("正規化著者") or paper.get("authors") or "",
+                            "journal": row.get("正規化雑誌") or paper.get("journal") or "",
+                            "year": paper.get("year") or 0,
+                            "doi": normalize_doi(paper.get("doi")),
+                            "url": normalize_url(paper.get("url")) or "",
+                            "volume": paper.get("volume") or "",
+                            "issue": paper.get("issue") or "",
+                            "pages": paper.get("pages") or "",
+                            "publisher": paper.get("publisher") or "",
+                        },
+                        user_id,
+                    )
+                    updated_count += 1
+                clear_library_caches()
+                st.success(f"{updated_count}件を正規化しました。")
+                st.rerun()
+
     with st.expander("統合履歴・復元", expanded=False):
         try:
             merge_backups = fetch_duplicate_merge_backups(supabase, user_id, limit=50)
@@ -3513,10 +3591,28 @@ elif menu == "重複確認":
         if not merge_backups:
             st.write("統合履歴はまだありません。")
         else:
+            history_keyword = st.text_input(
+                "統合履歴を検索",
+                key="duplicate_merge_history_search",
+            ).strip().casefold()
+            if history_keyword:
+                merge_backups = [
+                    backup
+                    for backup in merge_backups
+                    if history_keyword
+                    in " ".join(
+                        [
+                            str((backup.get("keeper_snapshot") or {}).get("title") or ""),
+                            str((backup.get("duplicate_snapshot") or {}).get("title") or ""),
+                            str(backup.get("merge_group_id") or ""),
+                            str(backup.get("created_at") or ""),
+                        ]
+                    ).casefold()
+                ]
             st.caption(
                 "ここでは統合時点のスナップショットを確認できます。"
                 "復元は、残す文献のメタデータを統合前の状態に戻します。"
-                "統合元として削除された文献そのものの再作成は、現時点では手動対応です。"
+                "統合元として削除された文献そのものも、スナップショットから再作成できます。"
             )
             history_rows = []
             for backup in merge_backups:
@@ -3572,6 +3668,34 @@ elif menu == "重複確認":
                                 clear_library_caches()
                                 st.success(
                                     "復元しました: "
+                                    f"{restore_result['restored_table']} / "
+                                    f"{restore_result['restored_id']}"
+                                )
+                                st.rerun()
+                    duplicate_restore_confirm = st.text_input(
+                        "統合元文献を再作成する場合は「再作成」と入力",
+                        key=f"restore_duplicate_backup_confirm_{backup['id']}",
+                    )
+                    if st.button(
+                        "統合元文献をスナップショットから再作成",
+                        key=f"restore_duplicate_backup_{backup['id']}",
+                    ):
+                        if duplicate_restore_confirm != "再作成":
+                            st.error("確認文字列が一致しません。")
+                        else:
+                            try:
+                                restore_result = restore_duplicate_from_merge_backup(
+                                    supabase,
+                                    user_id,
+                                    backup,
+                                )
+                            except Exception as error:
+                                logger.exception("Failed to restore duplicate from backup")
+                                st.error(f"統合元の再作成に失敗しました: {error}")
+                            else:
+                                clear_library_caches()
+                                st.success(
+                                    "統合元を再作成しました: "
                                     f"{restore_result['restored_table']} / "
                                     f"{restore_result['restored_id']}"
                                 )
@@ -3641,6 +3765,7 @@ elif menu == "重複確認":
                 if merge_labels:
                     keeper_preview = paper_by_label[keeper_label]
                     preview_rows = []
+                    merge_field_choices = {}
                     for label in merge_labels:
                         duplicate_preview = paper_by_label[label]
                         for field, label_text in (
@@ -3677,6 +3802,44 @@ elif menu == "重複確認":
                     if preview_rows:
                         st.caption("統合プレビュー")
                         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
+                        with st.expander("フィールドごとに残す値を選ぶ"):
+                            st.caption("添付ファイル以外の項目は、統合元の値を残す文献へ採用できます。")
+                            for merge_label in merge_labels:
+                                duplicate_preview = paper_by_label[merge_label]
+                                st.markdown(f"**統合元: {duplicate_preview.get('title') or '無題'}**")
+                                field_choice_cols = st.columns(2)
+                                for field_index, (field, label_text) in enumerate(
+                                    (
+                                        ("title", "タイトル"),
+                                        ("authors", "著者"),
+                                        ("journal", "雑誌"),
+                                        ("year", "年"),
+                                        ("doi", "DOI"),
+                                        ("url", "URL"),
+                                        ("volume", "巻"),
+                                        ("issue", "号"),
+                                        ("pages", "ページ"),
+                                        ("publisher", "出版社"),
+                                        ("status", "ステータス"),
+                                    )
+                                ):
+                                    keep_value = keeper_preview.get(field) or ""
+                                    duplicate_value = duplicate_preview.get(field) or ""
+                                    if field == "doi":
+                                        keep_value = normalize_doi(keep_value)
+                                        duplicate_value = normalize_doi(duplicate_value)
+                                    if not duplicate_value or keep_value == duplicate_value:
+                                        continue
+                                    with field_choice_cols[field_index % 2]:
+                                        choice = st.selectbox(
+                                            label_text,
+                                            ["残す文献の値", "統合元の値"],
+                                            key=f"merge_field_choice_{index}_{merge_label}_{field}",
+                                            help=f"残す: {keep_value or '(空)'} / 統合元: {duplicate_value}",
+                                        )
+                                    merge_field_choices.setdefault(merge_label, {})[field] = (
+                                        "duplicate" if choice == "統合元の値" else "keeper"
+                                    )
 
                 if st.button("選択した文献を統合", key=f"merge_button_{index}"):
                     if merge_confirm != "統合":
@@ -3696,6 +3859,7 @@ elif menu == "重複確認":
                                     keeper,
                                     paper_by_label[label],
                                     merge_group_id=merge_group_id,
+                                    preferred_fields=merge_field_choices.get(label),
                                 )
                                 citation_updates += merge_result["citation_updates"]
                                 backup_ids.extend(merge_result.get("backup_ids", []))
@@ -3846,6 +4010,7 @@ elif menu == "文書引用":
                 for item in citation.get("citation_items") or []:
                     if isinstance(item, dict) and item.get("paperId"):
                         citation_paper_ids.append(str(item["paperId"]))
+            all_citation_paper_ids = list(citation_paper_ids)
             citation_paper_ids = list(dict.fromkeys(citation_paper_ids))
             paper_map = {}
             if citation_paper_ids:
@@ -3875,10 +4040,16 @@ elif menu == "文書引用":
             visible_citations = filter_document_citations(citations, paper_map, citation_keyword)
             context_count = sum(1 for citation in citations if citation.get("context_text"))
             missing_context_count = len(citations) - context_count
-            metric_col1, metric_col2, metric_col3 = st.columns(3)
+            repeated_paper_count = sum(
+                1
+                for count in pd.Series(all_citation_paper_ids).value_counts().tolist()
+                if count > 1
+            ) if all_citation_paper_ids else 0
+            metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
             metric_col1.metric("引用", len(citations))
             metric_col2.metric("引用文あり", context_count)
             metric_col3.metric("未同期", missing_context_count)
+            metric_col4.metric("複数回引用", repeated_paper_count)
 
             export_rows = build_document_citation_export_rows(visible_citations, paper_map)
             if export_rows:
@@ -3933,4 +4104,53 @@ elif menu == "文書引用":
 
                     if citation.get("updated_at"):
                         st.caption(f"更新: {citation['updated_at']}")
+                    with st.expander("引用行を編集・削除"):
+                        edited_sort_order = st.number_input(
+                            "引用順",
+                            min_value=1,
+                            value=int(citation.get("sort_order") or 1),
+                            key=f"document_citation_sort_{citation['id']}",
+                        )
+                        edited_rendered_text = st.text_input(
+                            "表示テキスト",
+                            value=citation.get("rendered_text") or "",
+                            key=f"document_citation_rendered_{citation['id']}",
+                        )
+                        edited_context_text = st.text_area(
+                            "引用に使った文",
+                            value=citation.get("context_text") or "",
+                            height=100,
+                            key=f"document_citation_context_{citation['id']}",
+                        )
+                        edit_col1, edit_col2 = st.columns(2)
+                        with edit_col1:
+                            if st.button(
+                                "引用行を保存",
+                                key=f"save_document_citation_{citation['id']}",
+                                use_container_width=True,
+                            ):
+                                update_document_citation(
+                                    supabase,
+                                    user_id,
+                                    citation["id"],
+                                    rendered_text=edited_rendered_text,
+                                    context_text=edited_context_text,
+                                    sort_order=edited_sort_order,
+                                )
+                                st.success("引用行を更新しました。")
+                                st.rerun()
+                        with edit_col2:
+                            delete_confirm = st.text_input(
+                                "削除する場合は「削除」と入力",
+                                key=f"delete_document_citation_confirm_{citation['id']}",
+                            )
+                            if st.button(
+                                "この引用行を削除",
+                                key=f"delete_document_citation_{citation['id']}",
+                                disabled=delete_confirm != "削除",
+                                use_container_width=True,
+                            ):
+                                delete_document_citation(supabase, citation["id"])
+                                st.success("アプリ側の引用行を削除しました。Word本文は削除されません。")
+                                st.rerun()
                     st.divider()

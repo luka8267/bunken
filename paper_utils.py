@@ -133,6 +133,50 @@ def normalize_title_for_match(title):
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+JOURNAL_NORMALIZATION_MAP = {
+    "chem eur j": "Chemistry - A European Journal",
+    "chemistry a european journal": "Chemistry - A European Journal",
+    "j am chem soc": "Journal of the American Chemical Society",
+    "journal of the american chemical society": "Journal of the American Chemical Society",
+    "angew chem int ed": "Angewandte Chemie International Edition",
+    "angewandte chemie international edition": "Angewandte Chemie International Edition",
+    "phys chem chem phys": "Physical Chemistry Chemical Physics",
+    "physical chemistry chemical physics": "Physical Chemistry Chemical Physics",
+}
+
+
+def normalize_author_name(name):
+    text = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", name or "")).strip()
+    if not text:
+        return ""
+    if "," in text:
+        family, given = [part.strip() for part in text.split(",", maxsplit=1)]
+        return f"{family}, {given}" if given else family
+    parts = text.split()
+    if len(parts) >= 2:
+        return f"{parts[-1]}, {' '.join(parts[:-1])}"
+    return text
+
+
+def normalize_author_list(authors):
+    return ", ".join(
+        name
+        for name in (
+            normalize_author_name(part)
+            for part in re.split(r"\s+and\s+|;|\|", authors or "")
+        )
+        if name
+    )
+
+
+def normalize_journal_title(journal):
+    text = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", journal or "")).strip()
+    if not text:
+        return ""
+    key = re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
+    return JOURNAL_NORMALIZATION_MAP.get(key, text)
+
+
 def find_duplicate_paper_groups(papers):
     groups_by_key = {}
 
@@ -146,16 +190,20 @@ def find_duplicate_paper_groups(papers):
         if title and year:
             groups_by_key.setdefault(("タイトル+年", f"{title}:{year}"), []).append(paper)
 
+        if title:
+            groups_by_key.setdefault(("タイトル類似", title), []).append(paper)
+
+        author_key = normalize_author_list(paper.get("authors")).casefold()
+        journal_key = normalize_journal_title(paper.get("journal")).casefold()
+        if title and author_key:
+            groups_by_key.setdefault(("タイトル+著者", f"{title}:{author_key}"), []).append(paper)
+        if title and journal_key and year:
+            groups_by_key.setdefault(("タイトル+雑誌+年", f"{title}:{journal_key}:{year}"), []).append(paper)
+
     duplicate_groups = []
-    seen_group_ids = set()
     for (reason, value), group_papers in groups_by_key.items():
         if len(group_papers) < 2:
             continue
-
-        group_ids = tuple(sorted(str(paper.get("id")) for paper in group_papers))
-        if group_ids in seen_group_ids:
-            continue
-        seen_group_ids.add(group_ids)
 
         duplicate_groups.append(
             {
@@ -1306,18 +1354,27 @@ def transfer_item_attachments(
     return transferred_fields, conflicts
 
 
-def build_paper_merge_update(keeper, duplicate):
+def build_paper_merge_update(keeper, duplicate, preferred_fields=None):
     update_fields = {}
     conflicts = []
+    preferred_fields = preferred_fields or {}
 
     for field in ("title", "authors", "journal", "year", "doi", "url", "status"):
-        if not keeper.get(field) and duplicate.get(field):
+        if preferred_fields.get(field) == "duplicate" and duplicate.get(field):
+            update_fields[field] = duplicate[field]
+        elif preferred_fields.get(field) == "keeper":
+            continue
+        elif not keeper.get(field) and duplicate.get(field):
             update_fields[field] = duplicate[field]
 
     for field, label in (("pdf_path", "PDF"), ("supporting_path", "補足資料")):
         keeper_value = keeper.get(field)
         duplicate_value = duplicate.get(field)
-        if keeper_value and duplicate_value and keeper_value != duplicate_value:
+        if preferred_fields.get(field) == "duplicate" and duplicate_value:
+            update_fields[field] = duplicate_value
+        elif preferred_fields.get(field) == "keeper":
+            continue
+        elif keeper_value and duplicate_value and keeper_value != duplicate_value:
             conflicts.append(label)
         elif not keeper_value and duplicate_value:
             update_fields[field] = duplicate_value
@@ -1333,8 +1390,9 @@ def build_paper_merge_update(keeper, duplicate):
     return update_fields, conflicts
 
 
-def build_item_merge_update(keeper, duplicate):
+def build_item_merge_update(keeper, duplicate, preferred_fields=None):
     update_fields = {}
+    preferred_fields = preferred_fields or {}
 
     field_map = {
         "title": "title",
@@ -1353,7 +1411,11 @@ def build_item_merge_update(keeper, duplicate):
     for view_field, item_field in field_map.items():
         if view_field == "notes":
             continue
-        if not keeper.get(view_field) and duplicate.get(view_field):
+        if preferred_fields.get(view_field) == "duplicate" and duplicate.get(view_field):
+            update_fields[item_field] = duplicate[view_field]
+        elif preferred_fields.get(view_field) == "keeper":
+            continue
+        elif not keeper.get(view_field) and duplicate.get(view_field):
             update_fields[item_field] = duplicate[view_field]
 
     keeper_notes = (keeper.get("notes") or "").strip()
@@ -1507,7 +1569,65 @@ def restore_keeper_from_merge_backup(supabase, user_id, backup):
     return {"restored_table": "papers", "restored_id": paper_id}
 
 
-def merge_duplicate_paper(supabase, user_id, keeper, duplicate, merge_group_id=None):
+def restore_duplicate_from_merge_backup(supabase, user_id, backup):
+    snapshot = backup.get("duplicate_snapshot") or {}
+    if not snapshot:
+        raise ValueError("復元できる統合元スナップショットがありません。")
+
+    next_order = get_next_display_order(supabase, user_id)
+    created = create_user_paper(
+        supabase,
+        user_id,
+        snapshot.get("title") or "",
+        snapshot.get("authors") or "",
+        snapshot.get("journal") or "",
+        snapshot.get("year") or 0,
+        normalize_doi(snapshot.get("doi")) or None,
+        snapshot.get("url") or None,
+        snapshot.get("pdf_path") or None,
+        snapshot.get("supporting_path") or None,
+        snapshot.get("status") or "未読",
+        snapshot.get("notes") or "",
+        next_order,
+        snapshot.get("volume") or "",
+        snapshot.get("issue") or "",
+        snapshot.get("pages") or "",
+        snapshot.get("publisher") or "",
+        snapshot.get("item_type") or "journalArticle",
+    )
+    return {"restored_table": "items" if created.get("item_id") else "papers", "restored_id": created["id"]}
+
+
+def update_document_citation(supabase, user_id, citation_id, rendered_text=None, context_text=None, sort_order=None):
+    fields = {}
+    if rendered_text is not None:
+        fields["rendered_text"] = rendered_text
+    if context_text is not None:
+        fields["context_text"] = context_text
+    if sort_order is not None:
+        fields["sort_order"] = int(sort_order)
+    if not fields:
+        return None
+    return (
+        supabase.table("document_citations")
+        .update(fields)
+        .eq("id", citation_id)
+        .execute()
+    )
+
+
+def delete_document_citation(supabase, citation_id):
+    return supabase.table("document_citations").delete().eq("id", citation_id).execute()
+
+
+def merge_duplicate_paper(
+    supabase,
+    user_id,
+    keeper,
+    duplicate,
+    merge_group_id=None,
+    preferred_fields=None,
+):
     backup = create_duplicate_merge_backup(
         supabase,
         user_id,
@@ -1518,12 +1638,22 @@ def merge_duplicate_paper(supabase, user_id, keeper, duplicate, merge_group_id=N
     if is_item_backed_paper(keeper) or is_item_backed_paper(duplicate):
         if not is_item_backed_paper(keeper) or not is_item_backed_paper(duplicate):
             raise ValueError("items由来とpapers由来の文献は自動統合できません。")
-        result = merge_duplicate_item(supabase, user_id, keeper, duplicate)
+        result = merge_duplicate_item(
+            supabase,
+            user_id,
+            keeper,
+            duplicate,
+            preferred_fields=preferred_fields,
+        )
         result["backup_ids"] = [backup["backup_id"]] if backup["backup_id"] else []
         result["merge_group_id"] = backup["merge_group_id"]
         return result
 
-    update_fields, conflicts = build_paper_merge_update(keeper, duplicate)
+    update_fields, conflicts = build_paper_merge_update(
+        keeper,
+        duplicate,
+        preferred_fields=preferred_fields,
+    )
     if conflicts:
         raise ValueError(
             " / ".join(conflicts)
@@ -1576,11 +1706,15 @@ def merge_duplicate_paper(supabase, user_id, keeper, duplicate, merge_group_id=N
     }
 
 
-def merge_duplicate_item(supabase, user_id, keeper, duplicate):
+def merge_duplicate_item(supabase, user_id, keeper, duplicate, preferred_fields=None):
     ensure_user_owns_item(supabase, user_id, keeper["item_id"])
     ensure_user_owns_item(supabase, user_id, duplicate["item_id"])
 
-    update_fields = build_item_merge_update(keeper, duplicate)
+    update_fields = build_item_merge_update(
+        keeper,
+        duplicate,
+        preferred_fields=preferred_fields,
+    )
     transferred_fields, attachment_conflicts = transfer_item_attachments(
         supabase,
         user_id,
