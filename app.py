@@ -1716,6 +1716,7 @@ elif menu == "一覧":
                     )
 
             candidates = st.session_state.get("missing_doi_candidates", [])
+            missing_doi_searched = "missing_doi_candidates" in st.session_state
             if candidates:
                 st.write(f"{len(candidates)}件の候補が見つかりました。")
                 for item in candidates:
@@ -1784,6 +1785,11 @@ elif menu == "一覧":
                             f"DOI候補を適用しました: 更新 {updated_count}件 / スキップ {skipped_count}件"
                         )
                         st.rerun()
+            elif missing_doi_searched and missing_doi_records:
+                st.info(
+                    "Crossrefで適用できるDOI候補は見つかりませんでした。"
+                    "タイトルや年を確認してから再検索してください。"
+                )
             elif missing_doi_records:
                 st.write("候補検索を実行してください。")
             else:
@@ -1805,6 +1811,7 @@ elif menu == "一覧":
                     )
 
             metadata_candidates = st.session_state.get("doi_metadata_candidates", [])
+            metadata_searched = "doi_metadata_candidates" in st.session_state
             if metadata_candidates:
                 st.write(f"{len(metadata_candidates)}件の補完候補が見つかりました。")
                 for item in metadata_candidates:
@@ -1855,6 +1862,11 @@ elif menu == "一覧":
                         clear_library_caches()
                         st.success(f"DOIメタデータを補完しました: {updated_count}件")
                         st.rerun()
+            elif metadata_searched and doi_metadata_records:
+                st.info(
+                    "Crossrefで補完できる巻・号・ページ・出版社は見つかりませんでした。"
+                    "この場合、件数は不足メタデータとして残ります。"
+                )
             elif doi_metadata_records:
                 st.write("候補検索を実行してください。")
             else:
