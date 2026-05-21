@@ -1882,13 +1882,33 @@ elif menu == "一覧":
 
             with pane_col2:
                 st.subheader("文献")
+                list_rows = []
+                for record in records:
+                    list_rows.append(
+                        {
+                            "選択": "●" if str(record["id"]) == selected_list_paper_id else "",
+                            "タイトル": record.get("title") or "無題",
+                            "著者": record.get("authors") or "",
+                            "年": record.get("year") or "",
+                            "ステータス": record.get("status") or "",
+                            "PDF": "あり" if record.get("pdf_path") else "",
+                        }
+                    )
+                st.dataframe(
+                    pd.DataFrame(list_rows),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=260,
+                )
 
                 def format_list_pane_option(paper_id):
                     paper = paper_by_id[paper_id]
                     title = paper.get("title") or "無題"
                     year = paper.get("year") or "-"
                     status = paper.get("status") or "未設定"
-                    return f"{title} ({year}) / {status}"
+                    pdf_marker = " / PDF" if paper.get("pdf_path") else ""
+                    doi_marker = " / DOI" if normalize_doi(paper.get("doi")) else ""
+                    return f"{title} ({year}) / {status}{pdf_marker}{doi_marker}"
 
                 selected_list_paper_id = st.radio(
                     "文献",
@@ -1902,18 +1922,34 @@ elif menu == "一覧":
             selected_list_paper = paper_by_id[selected_list_paper_id]
             with pane_col3:
                 st.subheader("詳細")
-                quick_tab1, quick_tab2, quick_tab3, quick_tab4 = st.tabs(
-                    ["概要", "PDF", "読書", "Word引用"]
+                quick_tabs = st.tabs(
+                    ["概要", "PDF", "読書", "タグ", "引用", "Word引用", "編集"]
                 )
-                with quick_tab1:
+                with quick_tabs[0]:
                     render_paper_summary(
                         selected_list_paper,
                         tag_map=tag_map,
                         citation_usage_map=citation_usage_map,
                     )
-                with quick_tab2:
+                    detail_col1, detail_col2 = st.columns(2)
+                    with detail_col1:
+                        if st.button(
+                            "詳細画面で開く",
+                            key=f"list_pane_open_detail_{selected_list_paper['id']}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["detail_selected_paper_id"] = str(
+                                selected_list_paper["id"]
+                            )
+                            st.session_state["active_menu"] = "詳細"
+                            st.rerun()
+                    with detail_col2:
+                        paper_url = normalize_url(selected_list_paper.get("url"))
+                        if paper_url:
+                            st.link_button("Web", paper_url, use_container_width=True)
+                with quick_tabs[1]:
                     render_paper_pdf_preview(selected_list_paper, key_prefix="list_pane")
-                with quick_tab3:
+                with quick_tabs[2]:
                     quick_status = st.selectbox(
                         "読書ステータス",
                         READING_STATUSES,
@@ -1949,7 +1985,50 @@ elif menu == "一覧":
                         )
                         st.success("読書情報を保存しました。")
                         st.rerun()
-                with quick_tab4:
+                with quick_tabs[3]:
+                    render_paper_tag_editor(
+                        selected_list_paper,
+                        user_id,
+                        tag_map,
+                        key_prefix="list_pane",
+                    )
+                with quick_tabs[4]:
+                    citation_style = st.segmented_control(
+                        "引用スタイル",
+                        ["APA", "Vancouver", "Nature"],
+                        default="APA",
+                        key=f"list_pane_citation_style_{selected_list_paper['id']}",
+                    )
+                    citation_text = make_word_citation(
+                        selected_list_paper,
+                        style=citation_style,
+                    )
+                    st.code(citation_text)
+                    citation_file_name = re.sub(
+                        r"[^A-Za-z0-9._-]+",
+                        "-",
+                        selected_list_paper.get("title") or "citation",
+                    ).strip("-")
+                    export_col1, export_col2 = st.columns(2)
+                    with export_col1:
+                        st.download_button(
+                            "BibTeX",
+                            data=make_bibtex_entry(selected_list_paper).encode("utf-8"),
+                            file_name=f"{citation_file_name or 'citation'}.bib",
+                            mime="application/x-bibtex",
+                            key=f"list_pane_bibtex_{selected_list_paper['id']}",
+                            use_container_width=True,
+                        )
+                    with export_col2:
+                        st.download_button(
+                            "RIS",
+                            data=make_ris_entry(selected_list_paper).encode("utf-8"),
+                            file_name=f"{citation_file_name or 'citation'}.ris",
+                            mime="application/x-research-info-systems",
+                            key=f"list_pane_ris_{selected_list_paper['id']}",
+                            use_container_width=True,
+                        )
+                with quick_tabs[5]:
                     usage_entries = get_paper_usage_entries(
                         citation_usage_map,
                         selected_list_paper,
@@ -1965,6 +2044,15 @@ elif menu == "一覧":
                                 st.info(entry["context_text"])
                             if entry.get("updated_at"):
                                 st.caption(f"更新: {entry['updated_at']}")
+                with quick_tabs[6]:
+                    render_paper_edit_form(
+                        selected_list_paper,
+                        user_id,
+                        collections=collections,
+                        collection_label_by_id=collection_label_by_id,
+                        collection_id_by_label=collection_id_by_label,
+                        key_prefix="list_pane_edit",
+                    )
             st.stop()
 
         for _, row in df.iterrows():
