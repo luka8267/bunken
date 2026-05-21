@@ -1781,8 +1781,95 @@ elif menu == "一覧":
             pane_col1, pane_col2, pane_col3 = st.columns([1.1, 1.6, 2.3])
             with pane_col1:
                 st.subheader("コレクション")
-                st.caption(selected_collection_label)
                 st.write(f"表示中: {len(records)}件")
+                if st.button(
+                    f"全ライブラリ ({len(all_records)})",
+                    key="list_pane_all_library",
+                    use_container_width=True,
+                ):
+                    st.session_state["list_collection_filter"] = "すべて"
+                    st.session_state["list_tag_filter"] = "すべて"
+                    st.session_state["list_smart_filter"] = ""
+                    st.rerun()
+
+                try:
+                    pane_collection_counts = fetch_collection_counts(
+                        supabase,
+                        [collection["id"] for collection in collections],
+                    )
+                except Exception:
+                    logger.exception("Failed to fetch collection counts for list pane")
+                    pane_collection_counts = {}
+
+                for collection in collections:
+                    collection_label = collection_label_by_id.get(collection["id"])
+                    if not collection_label:
+                        continue
+                    count = pane_collection_counts.get(collection["id"], 0)
+                    selected_prefix = "● " if selected_collection_label == collection_label else ""
+                    if st.button(
+                        f"{selected_prefix}{collection.get('name') or '無題'} ({count})",
+                        key=f"list_pane_collection_{collection['id']}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["list_collection_filter"] = collection_label
+                        st.session_state["list_tag_filter"] = "すべて"
+                        st.rerun()
+
+                st.divider()
+                st.subheader("スマート")
+                smart_filter_options = [
+                    ("", "すべて", len(scoped_records)),
+                    (
+                        "DOIなし",
+                        "DOIなし",
+                        sum(1 for record in scoped_records if not normalize_doi(record.get("doi"))),
+                    ),
+                    (
+                        "PDFなし",
+                        "PDFなし",
+                        sum(1 for record in scoped_records if not record.get("pdf_path")),
+                    ),
+                    (
+                        "未読",
+                        "未読",
+                        sum(1 for record in scoped_records if (record.get("status") or "") == "未読"),
+                    ),
+                ]
+                for filter_value, filter_label, count in smart_filter_options:
+                    selected_prefix = "● " if smart_filter == filter_value else ""
+                    if st.button(
+                        f"{selected_prefix}{filter_label} ({count})",
+                        key=f"list_pane_smart_{filter_value or 'all'}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["list_smart_filter"] = filter_value
+                        st.rerun()
+
+                if tag_options:
+                    st.divider()
+                    st.subheader("タグ")
+                    if st.button(
+                        "タグなし指定を解除",
+                        key="list_pane_tag_all",
+                        use_container_width=True,
+                    ):
+                        st.session_state["list_tag_filter"] = "すべて"
+                        st.rerun()
+                    for tag in tag_options[:20]:
+                        tag_count = sum(
+                            1
+                            for record in scoped_records
+                            if tag in get_paper_tag_list(scoped_tag_map, record)
+                        )
+                        selected_prefix = "● " if selected_tag == tag else ""
+                        if st.button(
+                            f"{selected_prefix}{tag} ({tag_count})",
+                            key=f"list_pane_tag_{tag}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["list_tag_filter"] = tag
+                            st.rerun()
                 if selected_tag != "すべて":
                     st.caption(f"タグ: {selected_tag}")
                 if smart_filter:
