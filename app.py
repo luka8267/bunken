@@ -1779,6 +1779,7 @@ elif menu == "一覧":
                             )
                             updated_count += 1
                         st.session_state.pop("missing_doi_candidates", None)
+                        clear_library_caches()
                         st.success(
                             f"DOI候補を適用しました: 更新 {updated_count}件 / スキップ {skipped_count}件"
                         )
@@ -1851,6 +1852,7 @@ elif menu == "一覧":
                             )
                             updated_count += 1
                         st.session_state.pop("doi_metadata_candidates", None)
+                        clear_library_caches()
                         st.success(f"DOIメタデータを補完しました: {updated_count}件")
                         st.rerun()
             elif doi_metadata_records:
