@@ -372,6 +372,15 @@ def clear_library_caches():
     get_citation_usage_map_for_refs_cached.clear()
 
 
+def set_list_filters(collection_label=None, tag_label=None, smart_filter=None):
+    if collection_label is not None:
+        st.session_state["list_collection_filter"] = collection_label
+    if tag_label is not None:
+        st.session_state["list_tag_filter"] = tag_label
+    if smart_filter is not None:
+        st.session_state["list_smart_filter"] = smart_filter
+
+
 def clean_optional_id(value):
     if value is None:
         return None
@@ -1858,10 +1867,13 @@ elif menu == "一覧":
                     f"全ライブラリ ({len(all_records)})",
                     key="list_pane_all_library",
                     use_container_width=True,
+                    on_click=set_list_filters,
+                    kwargs={
+                        "collection_label": "すべて",
+                        "tag_label": "すべて",
+                        "smart_filter": "",
+                    },
                 ):
-                    st.session_state["list_collection_filter"] = "すべて"
-                    st.session_state["list_tag_filter"] = "すべて"
-                    st.session_state["list_smart_filter"] = ""
                     st.rerun()
 
                 try:
@@ -1882,9 +1894,12 @@ elif menu == "一覧":
                         f"{selected_prefix}{collection.get('name') or '無題'} ({count})",
                         key=f"list_pane_collection_{collection['id']}",
                         use_container_width=True,
+                        on_click=set_list_filters,
+                        kwargs={
+                            "collection_label": collection_label,
+                            "tag_label": "すべて",
+                        },
                     ):
-                        st.session_state["list_collection_filter"] = collection_label
-                        st.session_state["list_tag_filter"] = "すべて"
                         st.rerun()
 
                 st.divider()
@@ -1937,8 +1952,9 @@ elif menu == "一覧":
                         f"{selected_prefix}{filter_label} ({count})",
                         key=f"list_pane_smart_{filter_value or 'all'}",
                         use_container_width=True,
+                        on_click=set_list_filters,
+                        kwargs={"smart_filter": filter_value},
                     ):
-                        st.session_state["list_smart_filter"] = filter_value
                         st.rerun()
 
                 if tag_options:
@@ -1948,8 +1964,9 @@ elif menu == "一覧":
                         "タグなし指定を解除",
                         key="list_pane_tag_all",
                         use_container_width=True,
+                        on_click=set_list_filters,
+                        kwargs={"tag_label": "すべて"},
                     ):
-                        st.session_state["list_tag_filter"] = "すべて"
                         st.rerun()
                     for tag in tag_options[:20]:
                         tag_count = sum(
@@ -1962,8 +1979,9 @@ elif menu == "一覧":
                             f"{selected_prefix}{tag} ({tag_count})",
                             key=f"list_pane_tag_{tag}",
                             use_container_width=True,
+                            on_click=set_list_filters,
+                            kwargs={"tag_label": tag},
                         ):
-                            st.session_state["list_tag_filter"] = tag
                             st.rerun()
                 if selected_tag != "すべて":
                     st.caption(f"タグ: {selected_tag}")
