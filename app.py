@@ -1405,7 +1405,7 @@ elif menu == "一覧":
 
     if not df.empty:
         export_records = df.to_dict(orient="records")
-        with st.expander("エクスポート", expanded=False):
+        with st.popover("エクスポート"):
             export_col1, export_col2, export_col3 = st.columns(3)
             with export_col1:
                 word_bytes = export_to_word_bytes(export_records)
@@ -1576,7 +1576,7 @@ elif menu == "一覧":
         missing_doi_records = [
             record for record in records if not normalize_doi(record.get("doi"))
         ]
-        with st.expander(f"DOI一括取得（未入力: {len(missing_doi_records)}件）"):
+        with st.popover(f"DOI一括取得 ({len(missing_doi_records)})"):
             st.caption(
                 "Crossrefでタイトル検索し、タイトル一致または年一致の強い候補だけを表示します。"
                 "適用時も空のDOIだけを埋め、既存のDOIは上書きしません。"
@@ -1666,7 +1666,7 @@ elif menu == "一覧":
             and clean_optional_id(record.get("item_id"))
             and has_missing_publication_metadata(record)
         ]
-        with st.expander(f"DOIメタデータ補完（不足: {len(doi_metadata_records)}件）"):
+        with st.popover(f"メタデータ補完 ({len(doi_metadata_records)})"):
             st.caption(
                 "既にDOIがある文献について、Crossrefから巻・号・ページ・出版社を取得します。"
                 "既に入力済みの値は上書きしません。"
