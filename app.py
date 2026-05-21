@@ -1,3 +1,4 @@
+import base64
 import ipaddress
 import logging
 import re
@@ -111,6 +112,7 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 MAX_METADATA_REDIRECTS = 3
 METADATA_FETCH_BYTES = 300000
+PDF_EMBED_MAX_BYTES = 20 * 1024 * 1024
 READING_NOTE_MARKER = "--- 読書メモ ---"
 CITATION_NOTE_MARKER = "--- 引用予定メモ ---"
 IMPORT_REQUIRED_FIELDS = (
@@ -868,6 +870,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
     with control_col4:
         show_embed = st.toggle("アプリ内表示", value=True, key=show_key)
 
+    pdf_bytes = None
     col1, col2 = st.columns([1, 1])
     with col1:
         st.link_button("PDFを開く", signed_url, use_container_width=True)
@@ -875,6 +878,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
         try:
             response = requests.get(signed_url, timeout=20)
             response.raise_for_status()
+            pdf_bytes = response.content
         except requests.RequestException:
             logger.exception("Failed to fetch PDF for download")
             st.caption("ダウンロード準備に失敗しました。PDFを開くボタンを使ってください。")
@@ -882,7 +886,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
             safe_title = re.sub(r"[^A-Za-z0-9._-]+", "-", paper.get("title") or "paper").strip("-")
             st.download_button(
                 "PDFをダウンロード",
-                data=response.content,
+                data=pdf_bytes,
                 file_name=f"{safe_title or 'paper'}.pdf",
                 mime="application/pdf",
                 key=f"{key_prefix}_pdf_download_{paper['id']}",
@@ -890,18 +894,32 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
             )
 
     if show_embed:
-        viewer_url = f"{signed_url}#page={st.session_state[page_key]}&zoom={st.session_state[zoom_key]}"
-        components.html(
-            f"""
-            <iframe
-                src="{viewer_url}"
-                style="width: 100%; height: {st.session_state[height_key]}px; border: 1px solid #d0d7de; border-radius: 8px;"
-                title="PDF viewer">
-            </iframe>
-            """,
-            height=int(st.session_state[height_key]) + 20,
-        )
-        st.caption("環境によってPDFが埋め込み表示できない場合は「PDFを開く」を使ってください。")
+        if not pdf_bytes:
+            st.info("アプリ内表示用のPDFを取得できませんでした。「PDFを開く」またはダウンロードを使ってください。")
+        elif len(pdf_bytes) > PDF_EMBED_MAX_BYTES:
+            st.info(
+                "PDFが大きいためアプリ内表示を省略しました。"
+                " Braveでブロックされる場合は、PDFをダウンロードして開いてください。"
+            )
+        else:
+            encoded_pdf = base64.b64encode(pdf_bytes).decode("ascii")
+            viewer_url = (
+                f"data:application/pdf;base64,{encoded_pdf}"
+                f"#page={st.session_state[page_key]}&zoom={st.session_state[zoom_key]}"
+            )
+            components.html(
+                f"""
+                <iframe
+                    src="{viewer_url}"
+                    style="width: 100%; height: {st.session_state[height_key]}px; border: 1px solid #d0d7de; border-radius: 8px;"
+                    title="PDF viewer">
+                </iframe>
+                """,
+                height=int(st.session_state[height_key]) + 20,
+            )
+            st.caption(
+                "Brave対策として署名URLを直接埋め込まず、アプリ内で取得したPDFを表示しています。"
+            )
 
 
 def render_reading_workflow(paper, user_id, key_prefix="reading"):
