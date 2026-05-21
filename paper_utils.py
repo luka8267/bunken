@@ -113,6 +113,10 @@ def normalize_doi(doi):
         return ""
     text = re.sub(r"^doi:\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE)
+    if text.lower().startswith(("http://", "https://")):
+        match = DOI_RE.search(text)
+        if match:
+            text = match.group(0)
     text = text.strip().strip("<>").rstrip(").,;]")
     return text
 

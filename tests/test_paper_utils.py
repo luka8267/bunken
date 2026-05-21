@@ -128,6 +128,10 @@ class PaperUtilsCollectionTests(unittest.TestCase):
             normalize_doi("https://doi.org/10.1000/example."),
             "10.1000/example",
         )
+        self.assertEqual(
+            normalize_doi("https://pubs.acs.org/doi/10.1021/jacs.5b08424"),
+            "10.1021/jacs.5b08424",
+        )
         self.assertEqual(normalize_doi("doi: 10.1000/Example"), "10.1000/Example")
 
     def test_make_bibtex_entry_includes_publication_metadata(self):

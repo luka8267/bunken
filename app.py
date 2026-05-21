@@ -1403,36 +1403,6 @@ elif menu == "一覧":
             st.rerun()
     df = sort_papers_dataframe(df, sort_option, added_oldest_first=added_oldest_first)
 
-    if not df.empty:
-        export_records = df.to_dict(orient="records")
-        with st.popover("エクスポート"):
-            export_col1, export_col2, export_col3 = st.columns(3)
-            with export_col1:
-                word_bytes = export_to_word_bytes(export_records)
-                st.download_button(
-                    "Word",
-                    data=word_bytes,
-                    file_name="references.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
-            with export_col2:
-                st.download_button(
-                    "BibTeX",
-                    data=export_to_bibtex_text(export_records).encode("utf-8"),
-                    file_name="references.bib",
-                    mime="application/x-bibtex",
-                    use_container_width=True,
-                )
-            with export_col3:
-                st.download_button(
-                    "RIS",
-                    data=export_to_ris_text(export_records).encode("utf-8"),
-                    file_name="references.ris",
-                    mime="application/x-research-info-systems",
-                    use_container_width=True,
-                )
-
     if not all_records:
         st.write("データがありません")
     elif df.empty:
@@ -1441,6 +1411,45 @@ elif menu == "一覧":
         records = df.to_dict(orient="records")
         tag_map = get_tag_map_for_papers(supabase, records)
         citation_usage_map = get_citation_usage_map_for_display(user_id, records)
+        missing_doi_records = [
+            record for record in records if not normalize_doi(record.get("doi"))
+        ]
+        doi_metadata_records = [
+            record
+            for record in records
+            if normalize_doi(record.get("doi"))
+            and clean_optional_id(record.get("item_id"))
+            and has_missing_publication_metadata(record)
+        ]
+        tool_col1, tool_col2, tool_col3, tool_spacer = st.columns([1, 1, 1, 3])
+        with tool_col1:
+            with st.popover("エクスポート", use_container_width=True):
+                export_col1, export_col2, export_col3 = st.columns(3)
+                with export_col1:
+                    word_bytes = export_to_word_bytes(records)
+                    st.download_button(
+                        "Word",
+                        data=word_bytes,
+                        file_name="references.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+                with export_col2:
+                    st.download_button(
+                        "BibTeX",
+                        data=export_to_bibtex_text(records).encode("utf-8"),
+                        file_name="references.bib",
+                        mime="application/x-bibtex",
+                        use_container_width=True,
+                    )
+                with export_col3:
+                    st.download_button(
+                        "RIS",
+                        data=export_to_ris_text(records).encode("utf-8"),
+                        file_name="references.ris",
+                        mime="application/x-research-info-systems",
+                        use_container_width=True,
+                    )
         bulk_options = {
             f"[{record.get('ref_no')}] {record.get('title') or '無題'} ({record.get('year') or '-'})": record
             for record in records
@@ -1573,10 +1582,10 @@ elif menu == "一覧":
                         key="bulk_export_ris",
                         use_container_width=True,
                     )
-        missing_doi_records = [
-            record for record in records if not normalize_doi(record.get("doi"))
-        ]
-        with st.popover(f"DOI一括取得 ({len(missing_doi_records)})"):
+        with tool_col2:
+            doi_popover_label = f"DOI取得 ({len(missing_doi_records)})"
+            doi_popover = st.popover(doi_popover_label, use_container_width=True)
+        with doi_popover:
             st.caption(
                 "Crossrefでタイトル検索し、タイトル一致または年一致の強い候補だけを表示します。"
                 "適用時も空のDOIだけを埋め、既存のDOIは上書きしません。"
@@ -1659,14 +1668,12 @@ elif menu == "一覧":
                 st.write("候補検索を実行してください。")
             else:
                 st.write("DOI未入力の文献はありません。")
-        doi_metadata_records = [
-            record
-            for record in records
-            if normalize_doi(record.get("doi"))
-            and clean_optional_id(record.get("item_id"))
-            and has_missing_publication_metadata(record)
-        ]
-        with st.popover(f"メタデータ補完 ({len(doi_metadata_records)})"):
+        with tool_col3:
+            metadata_popover = st.popover(
+                f"メタデータ補完 ({len(doi_metadata_records)})",
+                use_container_width=True,
+            )
+        with metadata_popover:
             st.caption(
                 "既にDOIがある文献について、Crossrefから巻・号・ページ・出版社を取得します。"
                 "既に入力済みの値は上書きしません。"
@@ -1744,8 +1751,9 @@ elif menu == "一覧":
                 st.markdown(f"### [{row_dict['ref_no']}] {row_dict['title']}")
                 st.write(f"著者: {row_dict['authors']}")
                 st.write(f"雑誌: {row_dict['journal']} ({row_dict['year']})")
-                if row_dict.get("doi"):
-                    st.write(f"DOI: {row_dict['doi']}")
+                display_doi = normalize_doi(row_dict.get("doi"))
+                if display_doi:
+                    st.write(f"DOI: {display_doi}")
 
                 if row_dict.get("status"):
                     st.write(f"ステータス: {row_dict['status']}")
