@@ -10,6 +10,7 @@ from paper_utils import (
     export_to_bibtex_text,
     export_to_ris_text,
     fetch_collection_counts,
+    fetch_duplicate_merge_backups,
     fetch_paper_collection_ids,
     filter_document_citations,
     get_document_citation_usage_map,
@@ -573,6 +574,21 @@ ER  -
         payload = insert_calls[0][2]
         self.assertEqual(payload["keeper_paper_id"], "keep-1")
         self.assertEqual(payload["duplicate_snapshot"]["title"], "Duplicate")
+
+    def test_fetch_duplicate_merge_backups_filters_user(self):
+        supabase = FakeSupabase(
+            {
+                "duplicate_merge_backups": [
+                    {"id": "b1", "user_id": "u1", "keeper_snapshot": {"title": "A"}},
+                    {"id": "b2", "user_id": "u2", "keeper_snapshot": {"title": "B"}},
+                ]
+            }
+        )
+
+        backups = fetch_duplicate_merge_backups(supabase, "u1")
+
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0]["id"], "b1")
 
 
 if __name__ == "__main__":

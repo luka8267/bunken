@@ -1428,6 +1428,85 @@ def create_duplicate_merge_backup(
     return {"backup_id": backup_id, "merge_group_id": merge_group_id}
 
 
+def fetch_duplicate_merge_backups(supabase, user_id, limit=50):
+    result = (
+        supabase.table("duplicate_merge_backups")
+        .select(
+            "id, merge_group_id, keeper_paper_id, duplicate_paper_id, "
+            "keeper_item_id, duplicate_item_id, keeper_snapshot, duplicate_snapshot, created_at"
+        )
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data or []
+
+
+def restore_keeper_from_merge_backup(supabase, user_id, backup):
+    snapshot = backup.get("keeper_snapshot") or {}
+    item_id = backup.get("keeper_item_id")
+    paper_id = backup.get("keeper_paper_id")
+
+    if item_id:
+        ensure_user_owns_item(supabase, user_id, item_id)
+        update_fields = build_item_merge_update(snapshot, {})
+        for view_field, item_field in {
+            "title": "title",
+            "journal": "publication_title",
+            "year": "year",
+            "doi": "doi",
+            "url": "url",
+            "volume": "volume",
+            "issue": "issue",
+            "pages": "pages",
+            "publisher": "publisher",
+            "item_type": "item_type",
+            "notes": "abstract_note",
+        }.items():
+            update_fields[item_field] = snapshot.get(view_field)
+        (
+            supabase.table("items")
+            .update(update_fields)
+            .eq("id", item_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return {"restored_table": "items", "restored_id": item_id}
+
+    if not paper_id:
+        raise ValueError("復元対象の文献IDがバックアップにありません。")
+
+    update_fields = {
+        field: snapshot.get(field)
+        for field in (
+            "title",
+            "authors",
+            "journal",
+            "year",
+            "doi",
+            "url",
+            "status",
+            "notes",
+            "pdf_path",
+            "supporting_path",
+            "volume",
+            "issue",
+            "pages",
+            "publisher",
+            "item_type",
+        )
+    }
+    (
+        supabase.table("papers")
+        .update(update_fields)
+        .eq("id", paper_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    return {"restored_table": "papers", "restored_id": paper_id}
+
+
 def merge_duplicate_paper(supabase, user_id, keeper, duplicate, merge_group_id=None):
     backup = create_duplicate_merge_backup(
         supabase,

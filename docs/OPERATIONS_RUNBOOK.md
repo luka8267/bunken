@@ -34,6 +34,18 @@ the working directory. Use the repository root.
 - Re-run verification SQL after restoring.
 - Record the failed migration, timestamp, and restore source.
 
+## User operation backups
+
+Duplicate merges write snapshots to `public.duplicate_merge_backups` before any
+metadata transfer or delete happens. Use the app's `重複確認 > 統合履歴・復元`
+panel to inspect the keeper and duplicate snapshots.
+
+- The in-app restore returns the kept paper's metadata to the pre-merge snapshot.
+- The deleted duplicate is not automatically recreated yet. Use the stored
+  `duplicate_snapshot` as the source if manual recreation is needed.
+- Keep RLS enabled on backup tables and grant only the minimum API access needed
+  for authenticated users.
+
 ## Deployment smoke tests
 
 Web app:
@@ -62,4 +74,3 @@ When an error appears:
 3. Check Supabase API/RLS errors.
 4. If the error follows a DB change, pause further writes and follow rollback policy.
 5. Add a regression test when the failure is reproducible locally.
-

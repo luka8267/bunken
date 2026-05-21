@@ -50,6 +50,7 @@ from paper_utils import (
     fetch_user_papers_by_ids,
     fetch_user_collections,
     fetch_user_documents,
+    fetch_duplicate_merge_backups,
     filter_document_citations,
     filter_papers,
     find_duplicate_paper_groups,
@@ -67,6 +68,7 @@ from paper_utils import (
     parse_bibtex_entries,
     parse_ris_entries,
     replace_tags_for_paper,
+    restore_keeper_from_merge_backup,
     save_tags_for_paper,
     save_tags_for_item,
     search_user_papers,
@@ -875,21 +877,42 @@ def normalize_import_candidate(candidate):
 
 
 def find_import_duplicate(candidate, existing_records):
+    duplicate = find_import_duplicate_details(candidate, existing_records)
+    return duplicate.get("label", "") if duplicate else ""
+
+
+def find_import_duplicate_details(candidate, existing_records):
     candidate_doi = normalize_doi(candidate.get("doi")).casefold()
     candidate_title = normalize_title_for_match(candidate.get("title"))
     candidate_year = normalize_import_year(candidate.get("year"))
     for record in existing_records:
         record_doi = normalize_doi(record.get("doi")).casefold()
         if candidate_doi and record_doi == candidate_doi:
-            return f"DOI一致: {record.get('title') or '無題'}"
+            title = record.get("title") or "無題"
+            return {
+                "label": f"登録済みの可能性が高い: DOI一致: {title}",
+                "match_type": "DOI",
+                "confidence": "高",
+                "existing_id": str(record.get("id") or ""),
+                "existing_title": title,
+                "existing_year": record.get("year") or "",
+            }
         if (
             candidate_title
             and candidate_title == normalize_title_for_match(record.get("title"))
             and candidate_year
             and candidate_year == normalize_import_year(record.get("year"))
         ):
-            return f"タイトル+年一致: {record.get('title') or '無題'}"
-    return ""
+            title = record.get("title") or "無題"
+            return {
+                "label": f"登録済みかも: タイトル+年一致: {title}",
+                "match_type": "タイトル+年",
+                "confidence": "中",
+                "existing_id": str(record.get("id") or ""),
+                "existing_title": title,
+                "existing_year": record.get("year") or "",
+            }
+    return {}
 
 
 def create_imported_paper(candidate, user_id, tags_text="", pdf_file=None):
@@ -929,12 +952,13 @@ def render_import_candidates(candidates, existing_records, key_prefix, pdf_files
         st.write("インポート候補はありません。")
         return
 
-    duplicate_notes = [
-        find_import_duplicate(candidate, existing_records)
+    duplicate_details = [
+        find_import_duplicate_details(candidate, existing_records)
         for candidate in normalized_candidates
     ]
     preview_rows = []
     for index, candidate in enumerate(normalized_candidates, start=1):
+        duplicate = duplicate_details[index - 1]
         preview_rows.append(
             {
                 "番号": index,
@@ -942,10 +966,17 @@ def render_import_candidates(candidates, existing_records, key_prefix, pdf_files
                 "著者": candidate["authors"],
                 "年": candidate["year"],
                 "DOI": candidate["doi"],
-                "重複候補": duplicate_notes[index - 1],
+                "判定": duplicate.get("label", ""),
+                "信頼度": duplicate.get("confidence", ""),
+                "既存ID": duplicate.get("existing_id", ""),
             }
         )
     st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
+    duplicate_count = sum(1 for duplicate in duplicate_details if duplicate)
+    if duplicate_count:
+        st.warning(
+            f"{duplicate_count}件に重複候補があります。内容を確認してからインポートしてください。"
+        )
 
     import_tags = st.text_input(
         "インポート時に追加するタグ（任意・カンマ区切り）",
@@ -960,7 +991,7 @@ def render_import_candidates(candidates, existing_records, key_prefix, pdf_files
         imported_count = 0
         skipped_count = 0
         for index, candidate in enumerate(normalized_candidates):
-            if skip_duplicates and duplicate_notes[index]:
+            if skip_duplicates and duplicate_details[index]:
                 skipped_count += 1
                 continue
             if not candidate["title"] and not candidate["doi"]:
@@ -1739,6 +1770,116 @@ elif menu == "一覧":
                 st.write("候補検索を実行してください。")
             else:
                 st.write("DOIメタデータが不足している正規化文献はありません。")
+
+        list_view_mode = st.segmented_control(
+            "表示形式",
+            ["カード", "3ペイン"],
+            default="カード",
+            key="list_view_mode",
+        )
+        if list_view_mode == "3ペイン":
+            pane_col1, pane_col2, pane_col3 = st.columns([1.1, 1.6, 2.3])
+            with pane_col1:
+                st.subheader("コレクション")
+                st.caption(selected_collection_label)
+                st.write(f"表示中: {len(records)}件")
+                if selected_tag != "すべて":
+                    st.caption(f"タグ: {selected_tag}")
+                if smart_filter:
+                    st.caption(f"スマート: {smart_filter}")
+
+            paper_by_id = {str(record["id"]): record for record in records}
+            selected_list_paper_id = st.session_state.get("list_selected_paper_id")
+            if selected_list_paper_id not in paper_by_id:
+                selected_list_paper_id = str(records[0]["id"])
+
+            with pane_col2:
+                st.subheader("文献")
+
+                def format_list_pane_option(paper_id):
+                    paper = paper_by_id[paper_id]
+                    title = paper.get("title") or "無題"
+                    year = paper.get("year") or "-"
+                    status = paper.get("status") or "未設定"
+                    return f"{title} ({year}) / {status}"
+
+                selected_list_paper_id = st.radio(
+                    "文献",
+                    list(paper_by_id.keys()),
+                    index=list(paper_by_id.keys()).index(selected_list_paper_id),
+                    format_func=format_list_pane_option,
+                    label_visibility="collapsed",
+                    key="list_selected_paper_id",
+                )
+
+            selected_list_paper = paper_by_id[selected_list_paper_id]
+            with pane_col3:
+                st.subheader("詳細")
+                quick_tab1, quick_tab2, quick_tab3, quick_tab4 = st.tabs(
+                    ["概要", "PDF", "読書", "Word引用"]
+                )
+                with quick_tab1:
+                    render_paper_summary(
+                        selected_list_paper,
+                        tag_map=tag_map,
+                        citation_usage_map=citation_usage_map,
+                    )
+                with quick_tab2:
+                    render_paper_pdf_preview(selected_list_paper, key_prefix="list_pane")
+                with quick_tab3:
+                    quick_status = st.selectbox(
+                        "読書ステータス",
+                        READING_STATUSES,
+                        index=READING_STATUSES.index(selected_list_paper.get("status"))
+                        if selected_list_paper.get("status") in READING_STATUSES
+                        else 0,
+                        key=f"list_pane_status_{selected_list_paper['id']}",
+                    )
+                    quick_notes = st.text_area(
+                        "メモ",
+                        value=selected_list_paper.get("notes") or "",
+                        height=160,
+                        key=f"list_pane_notes_{selected_list_paper['id']}",
+                    )
+                    if st.button(
+                        "読書情報を保存",
+                        key=f"list_pane_save_reading_{selected_list_paper['id']}",
+                        use_container_width=True,
+                    ):
+                        update_paper_details(
+                            supabase,
+                            user_id,
+                            selected_list_paper["id"],
+                            quick_status,
+                            quick_notes,
+                            normalize_url(selected_list_paper.get("url")) or None,
+                            item_id=clean_optional_id(selected_list_paper.get("item_id")),
+                            doi=normalize_doi(selected_list_paper.get("doi")),
+                            volume=selected_list_paper.get("volume") or "",
+                            issue=selected_list_paper.get("issue") or "",
+                            pages=selected_list_paper.get("pages") or "",
+                            publisher=selected_list_paper.get("publisher") or "",
+                        )
+                        st.success("読書情報を保存しました。")
+                        st.rerun()
+                with quick_tab4:
+                    usage_entries = get_paper_usage_entries(
+                        citation_usage_map,
+                        selected_list_paper,
+                    )
+                    if not usage_entries:
+                        st.write("この文献は同期済みWord文書ではまだ使われていません。")
+                    else:
+                        for entry in usage_entries:
+                            st.markdown(f"**{entry.get('document_title') or '無題'}**")
+                            if entry.get("citation_text"):
+                                st.write(entry["citation_text"])
+                            if entry.get("context_text"):
+                                st.info(entry["context_text"])
+                            if entry.get("updated_at"):
+                                st.caption(f"更新: {entry['updated_at']}")
+            st.stop()
+
         for _, row in df.iterrows():
             row_dict = row.to_dict()
             item_id = clean_optional_id(row_dict.get("item_id"))
@@ -2483,6 +2624,80 @@ elif menu == "重複確認":
     )
     papers = result.data or []
     duplicate_groups = find_duplicate_paper_groups(papers)
+
+    with st.expander("統合履歴・復元", expanded=False):
+        try:
+            merge_backups = fetch_duplicate_merge_backups(supabase, user_id, limit=50)
+        except Exception:
+            logger.exception("Failed to fetch duplicate merge backups")
+            st.warning("統合履歴を取得できませんでした。")
+            merge_backups = []
+
+        if not merge_backups:
+            st.write("統合履歴はまだありません。")
+        else:
+            st.caption(
+                "ここでは統合時点のスナップショットを確認できます。"
+                "復元は、残す文献のメタデータを統合前の状態に戻します。"
+                "統合元として削除された文献そのものの再作成は、現時点では手動対応です。"
+            )
+            history_rows = []
+            for backup in merge_backups:
+                keeper_snapshot = backup.get("keeper_snapshot") or {}
+                duplicate_snapshot = backup.get("duplicate_snapshot") or {}
+                history_rows.append(
+                    {
+                        "日時": backup.get("created_at"),
+                        "残した文献": keeper_snapshot.get("title") or "無題",
+                        "統合元": duplicate_snapshot.get("title") or "無題",
+                        "残したID": backup.get("keeper_paper_id") or backup.get("keeper_item_id"),
+                        "統合元ID": backup.get("duplicate_paper_id") or backup.get("duplicate_item_id"),
+                    }
+                )
+            st.dataframe(pd.DataFrame(history_rows), use_container_width=True)
+
+            for backup_index, backup in enumerate(merge_backups, start=1):
+                keeper_snapshot = backup.get("keeper_snapshot") or {}
+                duplicate_snapshot = backup.get("duplicate_snapshot") or {}
+                with st.expander(
+                    f"{backup_index}. {keeper_snapshot.get('title') or '無題'} ← "
+                    f"{duplicate_snapshot.get('title') or '無題'}"
+                ):
+                    snapshot_col1, snapshot_col2 = st.columns(2)
+                    with snapshot_col1:
+                        st.write("残す文献の統合前スナップショット")
+                        st.json(keeper_snapshot, expanded=False)
+                    with snapshot_col2:
+                        st.write("統合元のスナップショット")
+                        st.json(duplicate_snapshot, expanded=False)
+
+                    restore_confirm = st.text_input(
+                        "残す文献のメタデータを戻す場合は「復元」と入力",
+                        key=f"restore_merge_backup_confirm_{backup['id']}",
+                    )
+                    if st.button(
+                        "残す文献を統合前メタデータに復元",
+                        key=f"restore_merge_backup_{backup['id']}",
+                    ):
+                        if restore_confirm != "復元":
+                            st.error("確認文字列が一致しません。")
+                        else:
+                            try:
+                                restore_result = restore_keeper_from_merge_backup(
+                                    supabase,
+                                    user_id,
+                                    backup,
+                                )
+                            except Exception as error:
+                                logger.exception("Failed to restore duplicate merge backup")
+                                st.error(f"復元に失敗しました: {error}")
+                            else:
+                                st.success(
+                                    "復元しました: "
+                                    f"{restore_result['restored_table']} / "
+                                    f"{restore_result['restored_id']}"
+                                )
+                                st.rerun()
 
     if not duplicate_groups:
         st.write("重複候補は見つかりませんでした。")
