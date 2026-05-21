@@ -1876,13 +1876,40 @@ elif menu == "一覧":
                     st.caption(f"スマート: {smart_filter}")
 
             paper_by_id = {str(record["id"]): record for record in records}
+            paper_ids = list(paper_by_id.keys())
             selected_list_paper_id = st.session_state.get("list_selected_paper_id")
             if selected_list_paper_id not in paper_by_id:
                 selected_list_paper_id = str(records[0]["id"])
+            selected_list_index = paper_ids.index(selected_list_paper_id)
 
             with pane_col2:
                 st.subheader("文献")
                 st.caption(f"{len(records)}件")
+                nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
+                with nav_col1:
+                    if st.button(
+                        "前へ",
+                        key="list_pane_prev_paper",
+                        disabled=selected_list_index <= 0,
+                        use_container_width=True,
+                    ):
+                        st.session_state["list_selected_paper_id"] = paper_ids[
+                            selected_list_index - 1
+                        ]
+                        st.rerun()
+                with nav_col2:
+                    st.caption(f"{selected_list_index + 1} / {len(paper_ids)}")
+                with nav_col3:
+                    if st.button(
+                        "次へ",
+                        key="list_pane_next_paper",
+                        disabled=selected_list_index >= len(paper_ids) - 1,
+                        use_container_width=True,
+                    ):
+                        st.session_state["list_selected_paper_id"] = paper_ids[
+                            selected_list_index + 1
+                        ]
+                        st.rerun()
                 for record_index, record in enumerate(records, start=1):
                     record_id = str(record["id"])
                     is_selected = record_id == selected_list_paper_id
@@ -1914,6 +1941,34 @@ elif menu == "一覧":
                             ):
                                 st.session_state["list_selected_paper_id"] = record_id
                                 st.rerun()
+                        if is_selected:
+                            status_cols = st.columns(3)
+                            for status_index, next_status in enumerate(
+                                ("未読", "読書中", "読了")
+                            ):
+                                with status_cols[status_index]:
+                                    if st.button(
+                                        next_status,
+                                        key=f"list_pane_quick_status_{record_id}_{next_status}",
+                                        disabled=status == next_status,
+                                        use_container_width=True,
+                                    ):
+                                        update_paper_details(
+                                            supabase,
+                                            user_id,
+                                            record["id"],
+                                            next_status,
+                                            record.get("notes") or "",
+                                            normalize_url(record.get("url")) or None,
+                                            item_id=clean_optional_id(record.get("item_id")),
+                                            doi=normalize_doi(record.get("doi")),
+                                            volume=record.get("volume") or "",
+                                            issue=record.get("issue") or "",
+                                            pages=record.get("pages") or "",
+                                            publisher=record.get("publisher") or "",
+                                        )
+                                        st.success(f"ステータスを{next_status}にしました。")
+                                        st.rerun()
                     if record_index >= 80:
                         st.caption("表示件数が多いため、中央ペインは先頭80件まで表示しています。")
                         break
