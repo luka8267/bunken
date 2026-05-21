@@ -7,6 +7,7 @@ import uuid
 from html.parser import HTMLParser
 from urllib.parse import unquote, urljoin, urlparse
 
+import fitz
 import pandas as pd
 import requests
 import streamlit as st
@@ -112,7 +113,6 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 MAX_METADATA_REDIRECTS = 3
 METADATA_FETCH_BYTES = 300000
-PDF_EMBED_MAX_BYTES = 20 * 1024 * 1024
 READING_NOTE_MARKER = "--- 読書メモ ---"
 CITATION_NOTE_MARKER = "--- 引用予定メモ ---"
 IMPORT_REQUIRED_FIELDS = (
@@ -842,6 +842,18 @@ def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
             st.error("タグの更新に失敗しました。入力内容とログを確認してください。")
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page_count = document.page_count
+    safe_page_number = min(max(int(page_number or 1), 1), max(page_count, 1))
+    page = document.load_page(safe_page_number - 1)
+    zoom = max(float(zoom_percent or 100) / 100.0, 0.5)
+    matrix = fitz.Matrix(zoom * 1.6, zoom * 1.6)
+    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+    return page_count, safe_page_number, pixmap.tobytes("png")
+
+
 def render_paper_pdf_preview(paper, key_prefix="paper"):
     signed_url = create_pdf_signed_url(supabase, paper.get("pdf_path"), 3600)
     if not signed_url:
@@ -896,30 +908,35 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
     if show_embed:
         if not pdf_bytes:
             st.info("アプリ内表示用のPDFを取得できませんでした。「PDFを開く」またはダウンロードを使ってください。")
-        elif len(pdf_bytes) > PDF_EMBED_MAX_BYTES:
-            st.info(
-                "PDFが大きいためアプリ内表示を省略しました。"
-                " Braveでブロックされる場合は、PDFをダウンロードして開いてください。"
-            )
         else:
-            encoded_pdf = base64.b64encode(pdf_bytes).decode("ascii")
-            viewer_url = (
-                f"data:application/pdf;base64,{encoded_pdf}"
-                f"#page={st.session_state[page_key]}&zoom={st.session_state[zoom_key]}"
-            )
-            components.html(
-                f"""
-                <iframe
-                    src="{viewer_url}"
-                    style="width: 100%; height: {st.session_state[height_key]}px; border: 1px solid #d0d7de; border-radius: 8px;"
-                    title="PDF viewer">
-                </iframe>
-                """,
-                height=int(st.session_state[height_key]) + 20,
-            )
-            st.caption(
-                "Brave対策として署名URLを直接埋め込まず、アプリ内で取得したPDFを表示しています。"
-            )
+            try:
+                page_count, rendered_page, png_bytes = render_pdf_page_png(
+                    pdf_bytes,
+                    st.session_state[page_key],
+                    st.session_state[zoom_key],
+                )
+            except Exception:
+                logger.exception("Failed to render PDF page")
+                st.info("PDFページ画像の生成に失敗しました。PDFを開く、またはダウンロードして確認してください。")
+            else:
+                if rendered_page != st.session_state[page_key]:
+                    st.session_state[page_key] = rendered_page
+                encoded_png = base64.b64encode(png_bytes).decode("ascii")
+                components.html(
+                    f"""
+                    <div style="width:100%; height:{st.session_state[height_key]}px; overflow:auto; border:1px solid #d0d7de; border-radius:8px; background:#f8fafc;">
+                      <img
+                        src="data:image/png;base64,{encoded_png}"
+                        alt="PDF page {rendered_page}"
+                        style="display:block; max-width:none; width:100%; height:auto; margin:0 auto;"
+                      />
+                    </div>
+                    """,
+                    height=int(st.session_state[height_key]) + 20,
+                )
+                st.caption(
+                    f"ページ {rendered_page} / {page_count}。Brave対策としてPDFを画像化して表示しています。"
+                )
 
 
 def render_reading_workflow(paper, user_id, key_prefix="reading"):

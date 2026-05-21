@@ -3,4 +3,5 @@ requests
 pandas
 python-docx
 pypdf
+PyMuPDF
 supabase==2.18.1
