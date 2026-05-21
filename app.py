@@ -2,6 +2,7 @@ import ipaddress
 import logging
 import re
 import socket
+import uuid
 from html.parser import HTMLParser
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -2487,7 +2488,10 @@ elif menu == "重複確認":
         st.write("重複候補は見つかりませんでした。")
     else:
         st.write(f"{len(duplicate_groups)}件の重複候補があります。")
-        st.caption("この画面は確認専用です。ここから文献は削除されません。")
+        st.caption(
+            "統合すると、タグ・コレクション・Word引用参照を残す文献へ移し、"
+            "統合元のスナップショットを duplicate_merge_backups に保存します。"
+        )
 
         for index, group in enumerate(duplicate_groups, start=1):
             reason = group["reason"]
@@ -2505,8 +2509,9 @@ elif menu == "重複確認":
                         st.write(f"著者: {paper.get('authors')}")
                     if paper.get("journal") or paper.get("year"):
                         st.write(f"雑誌・年: {paper.get('journal') or ''} ({paper.get('year') or '-'})")
-                    if paper.get("doi"):
-                        st.write(f"DOI: {paper.get('doi')}")
+                    display_doi = normalize_doi(paper.get("doi"))
+                    if display_doi:
+                        st.write(f"DOI: {display_doi}")
                     if paper.get("status"):
                         st.write(f"ステータス: {paper.get('status')}")
                     if paper.get("notes"):
@@ -2540,6 +2545,46 @@ elif menu == "重複確認":
                     "統合する場合は「統合」と入力",
                     key=f"merge_confirm_{index}",
                 )
+                if merge_labels:
+                    keeper_preview = paper_by_label[keeper_label]
+                    preview_rows = []
+                    for label in merge_labels:
+                        duplicate_preview = paper_by_label[label]
+                        for field, label_text in (
+                            ("title", "タイトル"),
+                            ("authors", "著者"),
+                            ("journal", "雑誌"),
+                            ("year", "年"),
+                            ("doi", "DOI"),
+                            ("status", "ステータス"),
+                            ("pdf_path", "PDF"),
+                            ("supporting_path", "補足資料"),
+                            ("notes", "メモ"),
+                        ):
+                            keep_value = keeper_preview.get(field) or ""
+                            duplicate_value = duplicate_preview.get(field) or ""
+                            if field == "doi":
+                                keep_value = normalize_doi(keep_value)
+                                duplicate_value = normalize_doi(duplicate_value)
+                            if keep_value or duplicate_value:
+                                action = "保持"
+                                if not keep_value and duplicate_value:
+                                    action = "統合元から補完"
+                                elif keep_value and duplicate_value and keep_value != duplicate_value:
+                                    action = "残す文献を優先"
+                                preview_rows.append(
+                                    {
+                                        "統合元": duplicate_preview.get("title") or "無題",
+                                        "項目": label_text,
+                                        "残す文献": keep_value,
+                                        "統合元の値": duplicate_value,
+                                        "処理": action,
+                                    }
+                                )
+                    if preview_rows:
+                        st.caption("統合プレビュー")
+                        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
+
                 if st.button("選択した文献を統合", key=f"merge_button_{index}"):
                     if merge_confirm != "統合":
                         st.error("確認文字列が一致しません。")
@@ -2549,17 +2594,22 @@ elif menu == "重複確認":
                         try:
                             keeper = paper_by_label[keeper_label]
                             citation_updates = 0
+                            backup_ids = []
+                            merge_group_id = str(uuid.uuid4())
                             for label in merge_labels:
                                 merge_result = merge_duplicate_paper(
                                     supabase,
                                     user_id,
                                     keeper,
                                     paper_by_label[label],
+                                    merge_group_id=merge_group_id,
                                 )
                                 citation_updates += merge_result["citation_updates"]
+                                backup_ids.extend(merge_result.get("backup_ids", []))
                                 keeper.update(merge_result["updated_fields"])
                             st.success(
-                                f"統合しました。Word引用参照の更新: {citation_updates}件"
+                                f"統合しました。Word引用参照の更新: {citation_updates}件 / "
+                                f"バックアップ: {len(backup_ids)}件"
                             )
                             st.rerun()
                         except ValueError as error:

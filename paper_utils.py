@@ -1389,11 +1389,60 @@ def get_paper_reference_ids(row):
     return [value for value in values if value is not None]
 
 
-def merge_duplicate_paper(supabase, user_id, keeper, duplicate):
+def normalize_snapshot_value(value):
+    value = normalize_json_value(value)
+    if isinstance(value, dict):
+        return {
+            str(key): normalize_snapshot_value(child_value)
+            for key, child_value in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [normalize_snapshot_value(child_value) for child_value in value]
+    return value
+
+
+def create_duplicate_merge_backup(
+    supabase,
+    user_id,
+    keeper,
+    duplicate,
+    merge_group_id=None,
+):
+    merge_group_id = merge_group_id or str(uuid.uuid4())
+    payload = {
+        "user_id": user_id,
+        "merge_group_id": merge_group_id,
+        "keeper_paper_id": str(keeper.get("id")) if keeper.get("id") is not None else None,
+        "duplicate_paper_id": (
+            str(duplicate.get("id")) if duplicate.get("id") is not None else None
+        ),
+        "keeper_item_id": keeper.get("item_id") or None,
+        "duplicate_item_id": duplicate.get("item_id") or None,
+        "keeper_snapshot": normalize_snapshot_value(keeper),
+        "duplicate_snapshot": normalize_snapshot_value(duplicate),
+    }
+    result = supabase.table("duplicate_merge_backups").insert(payload).execute()
+    backup_id = None
+    if result.data:
+        backup_id = result.data[0].get("id")
+    return {"backup_id": backup_id, "merge_group_id": merge_group_id}
+
+
+def merge_duplicate_paper(supabase, user_id, keeper, duplicate, merge_group_id=None):
+    backup = create_duplicate_merge_backup(
+        supabase,
+        user_id,
+        keeper,
+        duplicate,
+        merge_group_id=merge_group_id,
+    )
     if is_item_backed_paper(keeper) or is_item_backed_paper(duplicate):
         if not is_item_backed_paper(keeper) or not is_item_backed_paper(duplicate):
             raise ValueError("items由来とpapers由来の文献は自動統合できません。")
-        return merge_duplicate_item(supabase, user_id, keeper, duplicate)
+        result = merge_duplicate_item(supabase, user_id, keeper, duplicate)
+        result["backup_ids"] = [backup["backup_id"]] if backup["backup_id"] else []
+        result["merge_group_id"] = backup["merge_group_id"]
+        return result
 
     update_fields, conflicts = build_paper_merge_update(keeper, duplicate)
     if conflicts:
@@ -1440,7 +1489,12 @@ def merge_duplicate_paper(supabase, user_id, keeper, duplicate):
     if remaining.data:
         raise RuntimeError("統合元の文献が削除されませんでした。権限またはRLSを確認してください。")
 
-    return {"citation_updates": citation_updates, "updated_fields": update_fields}
+    return {
+        "citation_updates": citation_updates,
+        "updated_fields": update_fields,
+        "backup_ids": [backup["backup_id"]] if backup["backup_id"] else [],
+        "merge_group_id": backup["merge_group_id"],
+    }
 
 
 def merge_duplicate_item(supabase, user_id, keeper, duplicate):

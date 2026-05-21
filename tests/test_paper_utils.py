@@ -5,6 +5,7 @@ from postgrest.exceptions import APIError
 
 from paper_utils import (
     build_document_citation_export_rows,
+    create_duplicate_merge_backup,
     delete_user_document,
     export_to_bibtex_text,
     export_to_ris_text,
@@ -547,6 +548,31 @@ ER  -
         self.assertEqual(usage_map["paper-1"][0]["document_title"], "Manuscript")
         self.assertEqual(usage_map["paper-1"][0]["context_text"], "この論文では重要である1)。")
         self.assertEqual(usage_map["paper-1"][0]["reference_number"], 1)
+
+    def test_create_duplicate_merge_backup_stores_snapshots(self):
+        supabase = FakeSupabase({"duplicate_merge_backups": []})
+
+        result = create_duplicate_merge_backup(
+            supabase,
+            "user-1",
+            {"id": "keep-1", "item_id": None, "title": "Keep"},
+            {"id": "dup-1", "item_id": None, "title": "Duplicate"},
+            merge_group_id="11111111-1111-1111-1111-111111111111",
+        )
+
+        self.assertEqual(
+            result["merge_group_id"],
+            "11111111-1111-1111-1111-111111111111",
+        )
+        insert_calls = [
+            call
+            for call in supabase.calls
+            if call[0] == "duplicate_merge_backups" and call[1] == "insert"
+        ]
+        self.assertEqual(len(insert_calls), 1)
+        payload = insert_calls[0][2]
+        self.assertEqual(payload["keeper_paper_id"], "keep-1")
+        self.assertEqual(payload["duplicate_snapshot"]["title"], "Duplicate")
 
 
 if __name__ == "__main__":
