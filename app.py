@@ -1882,42 +1882,41 @@ elif menu == "一覧":
 
             with pane_col2:
                 st.subheader("文献")
-                list_rows = []
-                for record in records:
-                    list_rows.append(
-                        {
-                            "選択": "●" if str(record["id"]) == selected_list_paper_id else "",
-                            "タイトル": record.get("title") or "無題",
-                            "著者": record.get("authors") or "",
-                            "年": record.get("year") or "",
-                            "ステータス": record.get("status") or "",
-                            "PDF": "あり" if record.get("pdf_path") else "",
-                        }
-                    )
-                st.dataframe(
-                    pd.DataFrame(list_rows),
-                    hide_index=True,
-                    use_container_width=True,
-                    height=260,
-                )
+                st.caption(f"{len(records)}件")
+                for record_index, record in enumerate(records, start=1):
+                    record_id = str(record["id"])
+                    is_selected = record_id == selected_list_paper_id
+                    title = record.get("title") or "無題"
+                    authors = record.get("authors") or "著者不明"
+                    year = record.get("year") or "-"
+                    journal = record.get("journal") or "雑誌未設定"
+                    status = record.get("status") or "未設定"
+                    markers = []
+                    if record.get("pdf_path"):
+                        markers.append("PDF")
+                    if normalize_doi(record.get("doi")):
+                        markers.append("DOI")
+                    marker_text = " / ".join(markers) if markers else "添付なし"
 
-                def format_list_pane_option(paper_id):
-                    paper = paper_by_id[paper_id]
-                    title = paper.get("title") or "無題"
-                    year = paper.get("year") or "-"
-                    status = paper.get("status") or "未設定"
-                    pdf_marker = " / PDF" if paper.get("pdf_path") else ""
-                    doi_marker = " / DOI" if normalize_doi(paper.get("doi")) else ""
-                    return f"{title} ({year}) / {status}{pdf_marker}{doi_marker}"
-
-                selected_list_paper_id = st.radio(
-                    "文献",
-                    list(paper_by_id.keys()),
-                    index=list(paper_by_id.keys()).index(selected_list_paper_id),
-                    format_func=format_list_pane_option,
-                    label_visibility="collapsed",
-                    key="list_selected_paper_id",
-                )
+                    with st.container(border=is_selected):
+                        st.markdown(f"**{title}**")
+                        st.caption(f"{authors} / {journal} / {year}")
+                        meta_col1, meta_col2 = st.columns([1.2, 1])
+                        with meta_col1:
+                            st.caption(f"{status} / {marker_text}")
+                        with meta_col2:
+                            button_label = "選択中" if is_selected else "選択"
+                            if st.button(
+                                button_label,
+                                key=f"list_pane_select_{record_id}",
+                                disabled=is_selected,
+                                use_container_width=True,
+                            ):
+                                st.session_state["list_selected_paper_id"] = record_id
+                                st.rerun()
+                    if record_index >= 80:
+                        st.caption("表示件数が多いため、中央ペインは先頭80件まで表示しています。")
+                        break
 
             selected_list_paper = paper_by_id[selected_list_paper_id]
             with pane_col3:
