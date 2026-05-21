@@ -417,6 +417,9 @@ def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=
         publication_parts.append(paper.get("publisher"))
     if publication_parts:
         st.caption(" / ".join(publication_parts))
+    missing_metadata_text = format_missing_publication_metadata(paper)
+    if missing_metadata_text:
+        st.caption(f"不足メタデータ: {missing_metadata_text}")
     if paper.get("doi"):
         st.write(f"DOI: {paper.get('doi')}")
     if paper.get("status"):
@@ -656,6 +659,7 @@ def render_paper_edit_form(
                 and supporting_path.strip()
             ):
                 delete_pdf_from_storage(supabase, supporting_path)
+            clear_library_caches()
             st.success("更新しました")
             st.rerun()
         except Exception:
@@ -680,6 +684,7 @@ def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
                 clean_optional_id(row_dict.get("item_id")),
                 tags_text,
             )
+            clear_library_caches()
             st.success("タグを更新しました")
             st.rerun()
         except Exception:
@@ -896,8 +901,40 @@ def build_missing_doi_candidates(papers):
     return candidates
 
 
+PUBLICATION_METADATA_FIELDS = (
+    ("volume", "巻"),
+    ("issue", "号"),
+    ("pages", "ページ"),
+    ("publisher", "出版社"),
+)
+
+
+def get_missing_publication_metadata_fields(paper):
+    return [
+        (field, label)
+        for field, label in PUBLICATION_METADATA_FIELDS
+        if not paper.get(field)
+    ]
+
+
+def format_missing_publication_metadata(paper):
+    return " / ".join(label for _, label in get_missing_publication_metadata_fields(paper))
+
+
+def build_metadata_gap_rows(papers):
+    return [
+        {
+            "タイトル": paper.get("title") or "無題",
+            "DOI": normalize_doi(paper.get("doi")) or "",
+            "不足項目": format_missing_publication_metadata(paper),
+        }
+        for paper in papers
+        if has_missing_publication_metadata(paper)
+    ]
+
+
 def has_missing_publication_metadata(paper):
-    return any(not paper.get(field) for field in ("volume", "issue", "pages", "publisher"))
+    return bool(get_missing_publication_metadata_fields(paper))
 
 
 def build_existing_doi_metadata_candidates(papers):
@@ -1076,6 +1113,7 @@ def render_import_candidates(candidates, existing_records, key_prefix, pdf_files
                 pdf_file=(pdf_files[index] if pdf_files and index < len(pdf_files) else None),
             )
             imported_count += 1
+        clear_library_caches()
         st.success(f"インポートしました: {imported_count}件 / スキップ {skipped_count}件")
         st.rerun()
 
@@ -1338,6 +1376,7 @@ if menu == "追加":
                 save_tags_for_item(supabase, user_id, created_paper["item_id"], tags)
             else:
                 save_tags_for_paper(supabase, user_id, created_paper["id"], tags)
+            clear_library_caches()
             st.success("追加しました！")
         except Exception:
             logger.exception("Failed to add paper")
@@ -1600,6 +1639,7 @@ elif menu == "一覧":
                                 save_tags_for_item(supabase, user_id, item_id, bulk_tags)
                             else:
                                 save_tags_for_paper(supabase, user_id, record["id"], bulk_tags)
+                        clear_library_caches()
                         st.success(f"{len(selected_bulk_records)}件にタグを追加しました。")
                         st.rerun()
 
@@ -1634,6 +1674,7 @@ elif menu == "一覧":
                                 sorted(current_ids | collection_ids_to_add),
                                 item_id=item_id,
                             )
+                        clear_library_caches()
                         st.success(f"{len(selected_bulk_records)}件をコレクションに追加しました。")
                         st.rerun()
 
@@ -1662,6 +1703,7 @@ elif menu == "一覧":
                                 pages=record.get("pages") or "",
                                 publisher=record.get("publisher") or "",
                             )
+                        clear_library_caches()
                         st.success(f"{len(selected_bulk_records)}件のステータスを変更しました。")
                         st.rerun()
 
@@ -1804,6 +1846,17 @@ elif menu == "一覧":
                 "既にDOIがある文献について、Crossrefから巻・号・ページ・出版社を取得します。"
                 "既に入力済みの値は上書きしません。"
             )
+            metadata_gap_rows = build_metadata_gap_rows(doi_metadata_records)
+            if metadata_gap_rows:
+                st.dataframe(metadata_gap_rows, hide_index=True, use_container_width=True)
+                st.download_button(
+                    "不足リストCSV",
+                    data=pd.DataFrame(metadata_gap_rows).to_csv(index=False).encode("utf-8-sig"),
+                    file_name="metadata-gaps.csv",
+                    mime="text/csv",
+                    key="download_metadata_gaps",
+                    use_container_width=True,
+                )
             if st.button("不足メタデータ候補を検索", key="preview_doi_metadata_candidates"):
                 with st.spinner("CrossrefでDOIメタデータを取得しています..."):
                     st.session_state["doi_metadata_candidates"] = build_existing_doi_metadata_candidates(
@@ -1865,7 +1918,7 @@ elif menu == "一覧":
             elif metadata_searched and doi_metadata_records:
                 st.info(
                     "Crossrefで補完できる巻・号・ページ・出版社は見つかりませんでした。"
-                    "この場合、件数は不足メタデータとして残ります。"
+                    "この場合、件数は不足メタデータとして残ります。右ペインの編集タブ、または詳細画面から手入力できます。"
                 )
             elif doi_metadata_records:
                 st.write("候補検索を実行してください。")
@@ -2050,6 +2103,9 @@ elif menu == "一覧":
                         markers.append("PDF")
                     if normalize_doi(record.get("doi")):
                         markers.append("DOI")
+                    missing_metadata_text = format_missing_publication_metadata(record)
+                    if missing_metadata_text:
+                        markers.append(f"メタ不足: {missing_metadata_text}")
                     marker_text = " / ".join(markers) if markers else "添付なし"
 
                     with st.container(border=is_selected):
@@ -2266,6 +2322,9 @@ elif menu == "一覧":
                 display_doi = normalize_doi(row_dict.get("doi"))
                 if display_doi:
                     st.write(f"DOI: {display_doi}")
+                missing_metadata_text = format_missing_publication_metadata(row_dict)
+                if missing_metadata_text:
+                    st.caption(f"不足メタデータ: {missing_metadata_text}")
 
                 if row_dict.get("status"):
                     st.write(f"ステータス: {row_dict['status']}")
@@ -2342,6 +2401,7 @@ elif menu == "一覧":
                                 "up",
                                 item_id=item_id,
                             )
+                            clear_library_caches()
                             st.rerun()
                     with order_col2:
                         if st.button("下へ", key=f"down_{row_dict['id']}", use_container_width=True):
@@ -2353,10 +2413,12 @@ elif menu == "一覧":
                                 "down",
                                 item_id=item_id,
                             )
+                            clear_library_caches()
                             st.rerun()
                     with delete_col:
                         if st.button("削除", key=f"del_{row_dict['id']}", use_container_width=True):
                             delete_result = delete_paper(supabase, user_id, row_dict)
+                            clear_library_caches()
                             st.success("削除しました")
                             if delete_result.get("storage_errors"):
                                 st.session_state["post_action_warning"] = (
@@ -2811,6 +2873,7 @@ elif menu == "コレクション":
         if submitted:
             try:
                 create_collection(supabase, user_id, collection_name)
+                clear_library_caches()
                 st.success("コレクションを作成しました")
                 st.rerun()
             except Exception:
@@ -2849,6 +2912,7 @@ elif menu == "コレクション":
                             selected_collection["id"],
                             edited_name,
                         )
+                        clear_library_caches()
                         st.success("コレクション名を更新しました")
                         st.rerun()
                     except Exception:
@@ -2866,6 +2930,7 @@ elif menu == "コレクション":
                 else:
                     try:
                         delete_collection(supabase, user_id, selected_collection["id"])
+                        clear_library_caches()
                         st.success("コレクションを削除しました")
                         st.rerun()
                     except Exception:
@@ -3062,6 +3127,7 @@ elif menu == "重複確認":
                                 logger.exception("Failed to restore duplicate merge backup")
                                 st.error(f"復元に失敗しました: {error}")
                             else:
+                                clear_library_caches()
                                 st.success(
                                     "復元しました: "
                                     f"{restore_result['restored_table']} / "
@@ -3192,6 +3258,7 @@ elif menu == "重複確認":
                                 citation_updates += merge_result["citation_updates"]
                                 backup_ids.extend(merge_result.get("backup_ids", []))
                                 keeper.update(merge_result["updated_fields"])
+                            clear_library_caches()
                             st.success(
                                 f"統合しました。Word引用参照の更新: {citation_updates}件 / "
                                 f"バックアップ: {len(backup_ids)}件"
@@ -3253,6 +3320,7 @@ elif menu == "重複確認":
                                     storage_errors.extend(
                                         delete_result.get("storage_errors", [])
                                     )
+                                clear_library_caches()
                                 st.success("選択した文献を削除しました。")
                                 if storage_errors:
                                     st.session_state["post_action_warning"] = (
