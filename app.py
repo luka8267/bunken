@@ -1360,7 +1360,7 @@ elif menu == "一覧":
         with filter_col4:
             smart_filter = st.selectbox(
                 "スマート",
-                ["", "DOIなし", "PDFなし", "未読"],
+                ["", "DOIなし", "PDFなし", "PDFあり", "未読", "引用予定", "メタデータ不足"],
                 key="list_smart_filter",
             )
 
@@ -1414,9 +1414,23 @@ elif menu == "一覧":
         filtered_records = [
             record for record in filtered_records if not record.get("pdf_path")
         ]
+    elif smart_filter == "PDFあり":
+        filtered_records = [
+            record for record in filtered_records if record.get("pdf_path")
+        ]
     elif smart_filter == "未読":
         filtered_records = [
             record for record in filtered_records if (record.get("status") or "") == "未読"
+        ]
+    elif smart_filter == "引用予定":
+        filtered_records = [
+            record for record in filtered_records if (record.get("status") or "") == "引用予定"
+        ]
+    elif smart_filter == "メタデータ不足":
+        filtered_records = [
+            record
+            for record in filtered_records
+            if normalize_doi(record.get("doi")) and has_missing_publication_metadata(record)
         ]
     df = pd.DataFrame(filtered_records)
 
@@ -1831,9 +1845,33 @@ elif menu == "一覧":
                         sum(1 for record in scoped_records if not record.get("pdf_path")),
                     ),
                     (
+                        "PDFあり",
+                        "PDFあり",
+                        sum(1 for record in scoped_records if record.get("pdf_path")),
+                    ),
+                    (
                         "未読",
                         "未読",
                         sum(1 for record in scoped_records if (record.get("status") or "") == "未読"),
+                    ),
+                    (
+                        "引用予定",
+                        "引用予定",
+                        sum(
+                            1
+                            for record in scoped_records
+                            if (record.get("status") or "") == "引用予定"
+                        ),
+                    ),
+                    (
+                        "メタデータ不足",
+                        "メタデータ不足",
+                        sum(
+                            1
+                            for record in scoped_records
+                            if normalize_doi(record.get("doi"))
+                            and has_missing_publication_metadata(record)
+                        ),
                     ),
                 ]
                 for filter_value, filter_label, count in smart_filter_options:
