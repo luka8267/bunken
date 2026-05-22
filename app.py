@@ -4,6 +4,7 @@ import logging
 import re
 import socket
 import uuid
+import html
 from html.parser import HTMLParser
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -12,6 +13,13 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from supabase import Client
+
+st.set_page_config(
+    page_title="bunken",
+    page_icon="📚",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 try:
     import fitz
@@ -128,6 +136,240 @@ IMPORT_REQUIRED_FIELDS = (
 
 supabase: Client = build_supabase_client(SUPABASE_URL, SUPABASE_KEY)
 logger = logging.getLogger(__name__)
+
+
+def apply_app_shell_styles():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --bunken-bg: #f7f8fa;
+            --bunken-surface: #ffffff;
+            --bunken-panel: #fbfcfe;
+            --bunken-border: #d9dee7;
+            --bunken-text: #17202a;
+            --bunken-muted: #5b6675;
+            --bunken-accent: #0f766e;
+            --bunken-accent-soft: #e6f4f1;
+            --bunken-warning: #b7791f;
+            --bunken-warning-soft: #fff6db;
+            --bunken-danger: #b42318;
+            --bunken-danger-soft: #fee7e7;
+        }
+        .stApp {
+            background: var(--bunken-bg);
+            color: var(--bunken-text);
+        }
+        .block-container {
+            max-width: 1480px;
+            padding-top: 1.1rem;
+            padding-bottom: 2rem;
+        }
+        section[data-testid="stSidebar"] {
+            background: #ffffff;
+            border-right: 1px solid var(--bunken-border);
+        }
+        h1, h2, h3 {
+            letter-spacing: 0;
+        }
+        h1 {
+            font-size: 1.55rem;
+            margin-bottom: 0.8rem;
+        }
+        h2 {
+            font-size: 1.25rem;
+            margin-top: 0.25rem;
+        }
+        h3 {
+            font-size: 1.05rem;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            border-color: var(--bunken-border);
+            border-radius: 8px;
+            background: var(--bunken-surface);
+        }
+        div[data-testid="stButton"] > button,
+        div[data-testid="stDownloadButton"] > button,
+        div[data-testid="stLinkButton"] > a {
+            border-radius: 7px;
+            border-color: var(--bunken-border);
+            min-height: 2.15rem;
+            font-weight: 600;
+        }
+        div[data-testid="stButton"] > button[kind="primary"],
+        div[data-testid="stDownloadButton"] > button[kind="primary"] {
+            background: var(--bunken-accent);
+            border-color: var(--bunken-accent);
+        }
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.35rem;
+            border-bottom: 1px solid var(--bunken-border);
+        }
+        .stTabs [data-baseweb="tab"] {
+            border: 1px solid var(--bunken-border);
+            border-bottom: none;
+            border-radius: 7px 7px 0 0;
+            background: var(--bunken-surface);
+            padding: 0.35rem 0.75rem;
+            height: 2.2rem;
+            font-size: 0.86rem;
+        }
+        .stTabs [aria-selected="true"] {
+            background: var(--bunken-accent-soft);
+            color: var(--bunken-accent);
+            border-color: #a7dcd3;
+        }
+        div[data-testid="stDataFrame"],
+        div[data-testid="stDataEditor"] {
+            border: 1px solid var(--bunken-border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .bunken-panel-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--bunken-text);
+            margin: 0 0 0.15rem 0;
+        }
+        .bunken-subtle {
+            color: var(--bunken-muted);
+            font-size: 0.82rem;
+            line-height: 1.45;
+        }
+        .bunken-toolbar {
+            border: 1px solid var(--bunken-border);
+            background: var(--bunken-surface);
+            border-radius: 8px;
+            padding: 0.7rem 0.85rem;
+            margin: 0.6rem 0 0.75rem 0;
+        }
+        .bunken-list-card {
+            border: 1px solid var(--bunken-border);
+            background: var(--bunken-surface);
+            border-radius: 8px;
+            padding: 0.65rem 0.75rem;
+            margin-bottom: 0.45rem;
+        }
+        .bunken-list-card-selected {
+            border-color: #80c9bd;
+            background: var(--bunken-accent-soft);
+        }
+        .bunken-paper-title {
+            font-weight: 750;
+            color: #102033;
+            font-size: 0.9rem;
+            line-height: 1.25;
+            margin-bottom: 0.2rem;
+        }
+        .bunken-pill {
+            display: inline-block;
+            border: 1px solid var(--bunken-border);
+            border-radius: 999px;
+            padding: 0.12rem 0.48rem;
+            margin: 0.15rem 0.15rem 0 0;
+            font-size: 0.72rem;
+            font-weight: 650;
+            color: var(--bunken-muted);
+            background: var(--bunken-panel);
+        }
+        .bunken-pill-accent {
+            color: var(--bunken-accent);
+            background: var(--bunken-accent-soft);
+            border-color: #a7dcd3;
+        }
+        .bunken-pill-warning {
+            color: var(--bunken-warning);
+            background: var(--bunken-warning-soft);
+            border-color: #f3d37a;
+        }
+        .bunken-pill-danger {
+            color: var(--bunken-danger);
+            background: var(--bunken-danger-soft);
+            border-color: #f5b8b8;
+        }
+        .bunken-kpi {
+            border: 1px solid var(--bunken-border);
+            background: var(--bunken-surface);
+            border-radius: 8px;
+            padding: 0.65rem 0.75rem;
+        }
+        .bunken-kpi-label {
+            color: var(--bunken-muted);
+            font-size: 0.76rem;
+        }
+        .bunken-kpi-value {
+            color: var(--bunken-text);
+            font-size: 1.15rem;
+            font-weight: 750;
+        }
+        @media (max-width: 900px) {
+            .block-container {
+                padding-left: 0.75rem;
+                padding-right: 0.75rem;
+            }
+            .bunken-toolbar {
+                padding: 0.6rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_header(title, subtitle=None):
+    st.markdown(
+        f"<div class='bunken-panel-title'>{html.escape(str(title))}</div>",
+        unsafe_allow_html=True,
+    )
+    if subtitle:
+        st.markdown(
+            f"<div class='bunken-subtle'>{html.escape(str(subtitle))}</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def render_kpi(label, value):
+    safe_label = html.escape(str(label))
+    safe_value = html.escape(str(value))
+    st.markdown(
+        f"""
+        <div class="bunken-kpi">
+          <div class="bunken-kpi-label">{safe_label}</div>
+          <div class="bunken-kpi-value">{safe_value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def make_status_pill(label, kind="normal"):
+    safe_label = html.escape(str(label or "").strip())
+    class_name = {
+        "accent": "bunken-pill bunken-pill-accent",
+        "warning": "bunken-pill bunken-pill-warning",
+        "danger": "bunken-pill bunken-pill-danger",
+    }.get(kind, "bunken-pill")
+    return f"<span class='{class_name}'>{safe_label}</span>"
+
+
+def render_compact_paper_card(record, is_selected, marker_html):
+    title = html.escape(str(record.get("title") or "無題"))
+    authors = html.escape(str(record.get("authors") or "著者不明"))
+    journal = html.escape(str(record.get("journal") or "雑誌未設定"))
+    year = html.escape(str(record.get("year") or "-"))
+    status = html.escape(str(record.get("status") or "未設定"))
+    selected_class = " bunken-list-card-selected" if is_selected else ""
+    st.markdown(
+        f"""
+        <div class="bunken-list-card{selected_class}">
+          <div class="bunken-paper-title">{title}</div>
+          <div class="bunken-subtle">{authors} / {journal} / {year}</div>
+          <div>{make_status_pill(status, "warning" if status in ("未読", "引用予定") else "normal")}{marker_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def normalize_author_list_compat(authors):
@@ -1746,11 +1988,13 @@ if st.sidebar.button("ログアウト"):
     sign_out_user(supabase)
     st.rerun()
 
+apply_app_shell_styles()
+
 st.sidebar.write(f"ログイン中: {st.session_state.get('username', '')}")
 if st.session_state.get("email"):
     st.sidebar.caption(st.session_state["email"])
 
-st.title("📚 文献管理アプリ")
+st.title("bunken")
 post_action_warning = st.session_state.pop("post_action_warning", None)
 if post_action_warning:
     st.warning(post_action_warning)
@@ -1935,7 +2179,10 @@ elif menu == "一覧":
         collections = []
     collection_label_by_id, collection_id_by_label = build_collection_label_maps(collections)
 
-    st.header("📚 論文一覧")
+    render_section_header(
+        "文献一覧",
+        "左でコレクションやスマートフィルタを選び、中央で文献を選択し、右で詳細・PDF・メモを編集します。",
+    )
 
     with st.expander("絞り込み", expanded=True):
         keyword = st.text_input("タイトル・著者・DOI・メモで絞り込み", key="list_keyword").strip()
@@ -2031,7 +2278,15 @@ elif menu == "一覧":
     df = pd.DataFrame(filtered_records)
 
     if all_records:
-        st.caption(f"{len(filtered_records)} / {len(all_records)} 件を表示")
+        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+        with metric_col1:
+            render_kpi("表示中", f"{len(filtered_records)}件")
+        with metric_col2:
+            render_kpi("全ライブラリ", f"{len(all_records)}件")
+        with metric_col3:
+            render_kpi("DOIなし", f"{sum(1 for record in filtered_records if not normalize_doi(record.get('doi')))}件")
+        with metric_col4:
+            render_kpi("PDFなし", f"{sum(1 for record in filtered_records if not record.get('pdf_path'))}件")
 
     sort_option = st.selectbox("並び替え", SORT_OPTIONS)
     added_oldest_first = st.session_state.get("list_added_oldest_first", False)
@@ -2055,7 +2310,7 @@ elif menu == "一覧":
         list_view_mode = st.segmented_control(
             "表示形式",
             ["カード", "3ペイン"],
-            default="カード",
+            default="3ペイン",
             key="list_view_mode",
         )
         citation_usage_map = {}
@@ -2071,6 +2326,7 @@ elif menu == "一覧":
             and clean_optional_id(record.get("item_id"))
             and has_missing_publication_metadata(record)
         ]
+        st.markdown("<div class='bunken-toolbar'>", unsafe_allow_html=True)
         tool_col1, tool_col2, tool_col3, tool_spacer = st.columns([1, 1, 1, 3])
         with tool_col1:
             with st.popover("エクスポート", use_container_width=True):
@@ -2416,12 +2672,12 @@ elif menu == "一覧":
                 st.write("候補検索を実行してください。")
             else:
                 st.write("DOIメタデータが不足している正規化文献はありません。")
+        st.markdown("</div>", unsafe_allow_html=True)
 
         if list_view_mode == "3ペイン":
-            pane_col1, pane_col2, pane_col3 = st.columns([1.1, 1.6, 2.3])
+            pane_col1, pane_col2, pane_col3 = st.columns([1.05, 1.75, 2.35])
             with pane_col1:
-                st.subheader("コレクション")
-                st.write(f"表示中: {len(records)}件")
+                render_section_header("ライブラリ", f"表示中: {len(records)}件")
                 if st.button(
                     f"全ライブラリ ({len(all_records)})",
                     key="list_pane_all_library",
@@ -2462,7 +2718,7 @@ elif menu == "一覧":
                         st.rerun()
 
                 st.divider()
-                st.subheader("スマート")
+                render_section_header("スマートフィルタ")
                 smart_filter_options = [
                     ("", "すべて", len(scoped_records)),
                     (
@@ -2518,7 +2774,7 @@ elif menu == "一覧":
 
                 if tag_options:
                     st.divider()
-                    st.subheader("タグ")
+                    render_section_header("タグ")
                     if st.button(
                         "タグなし指定を解除",
                         key="list_pane_tag_all",
@@ -2555,8 +2811,7 @@ elif menu == "一覧":
             selected_list_index = paper_ids.index(selected_list_paper_id)
 
             with pane_col2:
-                st.subheader("文献")
-                st.caption(f"{len(records)}件")
+                render_section_header("文献", f"{len(records)}件")
                 nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
                 with nav_col1:
                     if st.button(
@@ -2585,37 +2840,37 @@ elif menu == "一覧":
                 for record_index, record in enumerate(records, start=1):
                     record_id = str(record["id"])
                     is_selected = record_id == selected_list_paper_id
-                    title = record.get("title") or "無題"
-                    authors = record.get("authors") or "著者不明"
-                    year = record.get("year") or "-"
-                    journal = record.get("journal") or "雑誌未設定"
                     status = record.get("status") or "未設定"
-                    markers = []
-                    if record.get("pdf_path"):
-                        markers.append("PDF")
-                    if normalize_doi(record.get("doi")):
-                        markers.append("DOI")
                     missing_metadata_text = format_missing_publication_metadata(record)
-                    if missing_metadata_text:
-                        markers.append(f"メタ不足: {missing_metadata_text}")
-                    marker_text = " / ".join(markers) if markers else "添付なし"
 
-                    with st.container(border=is_selected):
-                        st.markdown(f"**{title}**")
-                        st.caption(f"{authors} / {journal} / {year}")
-                        meta_col1, meta_col2 = st.columns([1.2, 1])
-                        with meta_col1:
-                            st.caption(f"{status} / {marker_text}")
-                        with meta_col2:
-                            button_label = "選択中" if is_selected else "選択"
-                            if st.button(
-                                button_label,
-                                key=f"list_pane_select_{record_id}",
-                                disabled=is_selected,
-                                use_container_width=True,
-                            ):
-                                st.session_state["list_selected_paper_id"] = record_id
-                                st.rerun()
+                    marker_html_parts = []
+                    if record.get("pdf_path"):
+                        marker_html_parts.append(make_status_pill("PDFあり", "accent"))
+                    else:
+                        marker_html_parts.append(make_status_pill("PDFなし", "danger"))
+                    if normalize_doi(record.get("doi")):
+                        marker_html_parts.append(make_status_pill("DOI", "accent"))
+                    else:
+                        marker_html_parts.append(make_status_pill("DOIなし", "danger"))
+                    if missing_metadata_text:
+                        marker_html_parts.append(make_status_pill("メタ不足", "warning"))
+                    render_compact_paper_card(
+                        record,
+                        is_selected,
+                        "".join(marker_html_parts),
+                    )
+                    select_col, status_col = st.columns([1, 2])
+                    with select_col:
+                        button_label = "選択中" if is_selected else "選択"
+                        if st.button(
+                            button_label,
+                            key=f"list_pane_select_{record_id}",
+                            disabled=is_selected,
+                            use_container_width=True,
+                        ):
+                            st.session_state["list_selected_paper_id"] = record_id
+                            st.rerun()
+                    with status_col:
                         if is_selected:
                             status_cols = st.columns(3)
                             for status_index, next_status in enumerate(
@@ -2663,7 +2918,7 @@ elif menu == "一覧":
                 selected_reference_ids,
             )
             with pane_col3:
-                st.subheader("詳細")
+                render_section_header("詳細", selected_list_paper.get("title") or "無題")
                 quick_tabs = st.tabs(
                     ["概要", "PDF", "読書", "タグ", "引用", "Word引用", "編集"]
                 )
@@ -3124,7 +3379,10 @@ elif menu == "詳細":
 
 elif menu == "PDF読書":
     user_id = get_current_user_id()
-    st.header("PDF読書")
+    render_section_header(
+        "PDF読書",
+        "PDF付き文献だけを選び、ページ表示・読書メモ・引用予定メモを一画面で扱います。",
+    )
     try:
         result = fetch_user_papers(
             supabase,
@@ -3143,6 +3401,19 @@ elif menu == "PDF読書":
     if not pdf_papers:
         st.write("PDF付き文献はまだありません。一覧または詳細の編集タブからPDFを追加できます。")
     else:
+        pdf_metric_col1, pdf_metric_col2, pdf_metric_col3 = st.columns(3)
+        with pdf_metric_col1:
+            render_kpi("PDF付き文献", f"{len(pdf_papers)}件")
+        with pdf_metric_col2:
+            render_kpi(
+                "読書中",
+                f"{sum(1 for paper in pdf_papers if (paper.get('status') or '') == '読書中')}件",
+            )
+        with pdf_metric_col3:
+            render_kpi(
+                "引用予定",
+                f"{sum(1 for paper in pdf_papers if (paper.get('status') or '') == '引用予定')}件",
+            )
         read_filter_col, sort_col = st.columns([1, 1])
         with read_filter_col:
             reading_filter = st.selectbox(
@@ -3189,12 +3460,15 @@ elif menu == "PDF読書":
                 key="pdf_reading_selected_paper_id",
             )
             selected_pdf_paper = paper_by_id[selected_pdf_paper_id]
-            reader_col, note_col = st.columns([1.7, 1])
+            reader_col, note_col = st.columns([1.75, 1])
             with reader_col:
-                st.subheader(selected_pdf_paper.get("title") or "無題")
+                render_section_header(
+                    selected_pdf_paper.get("title") or "無題",
+                    f"{selected_pdf_paper.get('journal') or '雑誌未設定'} / {selected_pdf_paper.get('year') or '-'}",
+                )
                 render_paper_pdf_preview(selected_pdf_paper, key_prefix="pdf_reading")
             with note_col:
-                st.subheader("読書メモ")
+                render_section_header("読書メモと引用予定")
                 render_reading_workflow(
                     selected_pdf_paper,
                     user_id,
@@ -3204,7 +3478,10 @@ elif menu == "PDF読書":
 
 elif menu == "インポート":
     user_id = get_current_user_id()
-    st.header("インポート")
+    render_section_header(
+        "インポート",
+        "BibTeX、RIS、DOIリスト、PDFから取り込み前プレビューを作り、重複候補を確認してから登録します。",
+    )
     existing_result = fetch_user_papers(
         supabase,
         user_id,
@@ -3631,7 +3908,10 @@ elif menu == "コレクション":
 
 elif menu == "重複確認":
     user_id = get_current_user_id()
-    st.header("重複確認")
+    render_section_header(
+        "データ品質・重複統合",
+        "著者名・雑誌名の正規化、統合履歴、重複候補を同じ画面で確認します。統合前にはバックアップを保存します。",
+    )
 
     result = fetch_user_papers(
         supabase,
@@ -3643,8 +3923,28 @@ elif menu == "重複確認":
     )
     papers = result.data or []
     duplicate_groups = find_duplicate_paper_groups(papers)
+    quality_candidate_count = 0
+    for paper in papers:
+        normalized_authors = normalize_author_list_compat(paper.get("authors"))
+        normalized_journal = normalize_journal_title_compat(paper.get("journal"))
+        if (
+            normalized_authors
+            and normalized_authors != (paper.get("authors") or "")
+        ) or (
+            normalized_journal
+            and normalized_journal != (paper.get("journal") or "")
+        ):
+            quality_candidate_count += 1
 
-    with st.expander("データ品質チェック", expanded=False):
+    quality_metric1, quality_metric2, quality_metric3 = st.columns(3)
+    with quality_metric1:
+        render_kpi("重複候補", f"{len(duplicate_groups)}件")
+    with quality_metric2:
+        render_kpi("正規化候補", f"{quality_candidate_count}件")
+    with quality_metric3:
+        render_kpi("対象文献", f"{len(papers)}件")
+
+    with st.expander("データ品質チェック", expanded=quality_candidate_count > 0):
         quality_rows = []
         for paper in papers:
             normalized_authors = normalize_author_list_compat(paper.get("authors"))
