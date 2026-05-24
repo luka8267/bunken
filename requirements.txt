@@ -4,4 +4,6 @@ pandas
 python-docx
 pypdf
 PyMuPDF
+citeproc-py
+citeproc-py-styles
 supabase==2.18.1

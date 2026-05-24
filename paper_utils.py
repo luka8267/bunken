@@ -8,6 +8,20 @@ import uuid
 from docx import Document
 
 try:
+    from citeproc import Citation, CitationItem, CitationStylesBibliography, CitationStylesStyle
+    from citeproc.formatter import plain
+    from citeproc.source.json import CiteProcJSON
+    import citeproc_styles
+except ImportError:
+    Citation = None
+    CitationItem = None
+    CitationStylesBibliography = None
+    CitationStylesStyle = None
+    CiteProcJSON = None
+    citeproc_styles = None
+    plain = None
+
+try:
     from pypdf import PdfReader
 except ImportError:
     PdfReader = None
@@ -26,6 +40,20 @@ DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.IGNORECASE)
 MAX_STORAGE_BASENAME_LENGTH = 80
 READING_STATUSES = ["未読", "読書中", "読了", "再読したい", "引用予定"]
 SORT_OPTIONS = ["追加順", "年（新しい順）", "年（古い順）", "タイトル", "ステータス"]
+CSL_STYLE_OPTIONS = {
+    "APA": "apa",
+    "Vancouver": "vancouver",
+    "Nature": "nature",
+    "ACS": "american-chemical-society",
+    "IEEE": "ieee",
+    "Elsevier Harvard": "elsevier-harvard",
+    "Chicago Author-Date": "chicago-author-date",
+}
+PDF_ANNOTATION_TYPES = {
+    "highlight": "ハイライト",
+    "page_note": "ページメモ",
+    "citation_note": "引用予定",
+}
 
 
 def is_missing_relation_error(error):
@@ -1505,6 +1533,97 @@ def fetch_duplicate_merge_backups(supabase, user_id, limit=50):
     return result.data or []
 
 
+def is_missing_pdf_annotations_error(error):
+    error_text = str(error).lower()
+    return (
+        "pdf_annotations" in error_text
+        and (
+            "could not find the table" in error_text
+            or "relation" in error_text
+            or "does not exist" in error_text
+            or "schema cache" in error_text
+        )
+    )
+
+
+def fetch_pdf_annotations(supabase, user_id, paper_id):
+    if not paper_id:
+        return []
+    try:
+        result = (
+            supabase.table("pdf_annotations")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("paper_id", str(paper_id))
+            .order("page_number")
+            .order("created_at")
+            .execute()
+        )
+        return result.data or []
+    except APIError as error:
+        if is_missing_pdf_annotations_error(error):
+            return []
+        raise
+
+
+def create_pdf_annotation(
+    supabase,
+    user_id,
+    paper_id,
+    page_number,
+    annotation_type,
+    selected_text="",
+    note="",
+    color="#fff6db",
+):
+    annotation_type = annotation_type if annotation_type in PDF_ANNOTATION_TYPES else "page_note"
+    payload = {
+        "user_id": user_id,
+        "paper_id": str(paper_id),
+        "page_number": max(int(page_number or 1), 1),
+        "annotation_type": annotation_type,
+        "selected_text": normalize_text_db_value(selected_text),
+        "note": normalize_text_db_value(note),
+        "color": color or "#fff6db",
+    }
+    return supabase.table("pdf_annotations").insert(payload).execute()
+
+
+def update_pdf_annotation(
+    supabase,
+    user_id,
+    annotation_id,
+    annotation_type,
+    selected_text="",
+    note="",
+    color="#fff6db",
+):
+    annotation_type = annotation_type if annotation_type in PDF_ANNOTATION_TYPES else "page_note"
+    payload = {
+        "annotation_type": annotation_type,
+        "selected_text": normalize_text_db_value(selected_text),
+        "note": normalize_text_db_value(note),
+        "color": color or "#fff6db",
+    }
+    return (
+        supabase.table("pdf_annotations")
+        .update(payload)
+        .eq("id", annotation_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
+def delete_pdf_annotation(supabase, user_id, annotation_id):
+    return (
+        supabase.table("pdf_annotations")
+        .delete()
+        .eq("id", annotation_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
 def restore_keeper_from_merge_backup(supabase, user_id, backup):
     snapshot = backup.get("keeper_snapshot") or {}
     item_id = backup.get("keeper_item_id")
@@ -1797,7 +1916,107 @@ def sort_papers_dataframe(df, sort_option, added_oldest_first=False):
     return sorted_df
 
 
-def make_word_citation(row, style="APA"):
+def get_csl_style_path(style):
+    if citeproc_styles is None:
+        return None
+    style_id = CSL_STYLE_OPTIONS.get(style, style)
+    style_id = str(style_id or "").strip().lower()
+    if not style_id:
+        return None
+    if style_id.endswith(".csl"):
+        style_id = style_id[:-4]
+    style_path = os.path.join(
+        os.path.dirname(citeproc_styles.__file__),
+        "styles",
+        f"{style_id}.csl",
+    )
+    return style_path if os.path.exists(style_path) else None
+
+
+def parse_csl_authors(authors):
+    csl_authors = []
+    for name in normalize_bibtex_authors(authors):
+        text = re.sub(r"\s+", " ", name or "").strip()
+        if not text:
+            continue
+        if "," in text:
+            family, given = [part.strip() for part in text.split(",", maxsplit=1)]
+        else:
+            parts = text.split()
+            family = parts[-1]
+            given = " ".join(parts[:-1])
+        author = {"family": family}
+        if given:
+            author["given"] = given
+        csl_authors.append(author)
+    return csl_authors
+
+
+def paper_to_csl_json(row):
+    year = row.get("year")
+    try:
+        year = int(year) if year not in (None, "") else None
+    except (TypeError, ValueError):
+        year = None
+    item_type = row.get("item_type") or ("journalArticle" if row.get("journal") else "webpage")
+    csl_type = {
+        "journalArticle": "article-journal",
+        "book": "book",
+        "bookSection": "chapter",
+        "webpage": "webpage",
+        "thesis": "thesis",
+        "report": "report",
+    }.get(item_type, "article-journal")
+    item_id = str(row.get("item_id") or row.get("id") or "item")
+    data = {
+        "id": item_id,
+        "type": csl_type,
+        "title": row.get("title") or "",
+        "container-title": row.get("journal") or "",
+        "volume": row.get("volume") or "",
+        "issue": row.get("issue") or "",
+        "page": row.get("pages") or "",
+        "publisher": row.get("publisher") or "",
+        "DOI": normalize_doi(row.get("doi")) or "",
+        "URL": row.get("url") or "",
+        "author": parse_csl_authors(row.get("authors")),
+    }
+    if year:
+        data["issued"] = {"date-parts": [[year]]}
+    return {key: value for key, value in data.items() if value not in ("", [], None)}
+
+
+def format_csl_bibliography_entry(row, style="APA"):
+    if not all([Citation, CitationItem, CitationStylesBibliography, CitationStylesStyle, CiteProcJSON, plain]):
+        return None
+    style_path = get_csl_style_path(style)
+    if not style_path:
+        return None
+    try:
+        csl_item = paper_to_csl_json(row)
+        source = CiteProcJSON([csl_item])
+        csl_style = CitationStylesStyle(style_path, validate=False)
+        bibliography = CitationStylesBibliography(csl_style, source, plain)
+        citation = Citation([CitationItem(csl_item["id"])])
+        bibliography.register(citation)
+        entries = bibliography.bibliography()
+    except Exception:
+        return None
+    if not entries:
+        return None
+    return append_missing_csl_doi(str(entries[0]).strip(), row, style)
+
+
+def append_missing_csl_doi(text, row, style="APA"):
+    doi = normalize_doi(row.get("doi"))
+    if not doi or doi.lower() in text.lower():
+        return text
+    if str(style or "").lower() in {"apa", "elsevier-harvard", "chicago-author-date"}:
+        return f"{text} https://doi.org/{doi}"
+    return f"{text} doi: {doi}"
+
+
+def make_word_citation_fallback(row, style="APA"):
     authors = normalize_author_text(row.get("authors", ""))
     year = row.get("year", "")
     title = row.get("title", "")
@@ -1830,6 +2049,13 @@ def make_word_citation(row, style="APA"):
         citation = f"{authors} ({year}). {title}. {publication}."
 
     return citation
+
+
+def make_word_citation(row, style="APA"):
+    csl_entry = format_csl_bibliography_entry(row, style=style)
+    if csl_entry:
+        return csl_entry
+    return make_word_citation_fallback(row, style=style)
 
 
 def make_bibtex_key(row):

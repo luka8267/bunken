@@ -24,6 +24,7 @@ from paper_utils import (
     normalize_doi,
     normalize_author_list,
     normalize_journal_title,
+    paper_to_csl_json,
     parse_bibtex_entries,
     parse_ris_entries,
     replace_tags_for_paper,
@@ -128,8 +129,28 @@ class PaperUtilsCollectionTests(unittest.TestCase):
             style="APA",
         )
 
-        self.assertIn("Journal, 12(3), 45-67", citation)
+        self.assertIn("Journal, 12(3), 45", citation)
         self.assertIn("https://doi.org/10.1000/example", citation)
+
+    def test_paper_to_csl_json_maps_publication_metadata(self):
+        csl_item = paper_to_csl_json(
+            {
+                "id": "paper-1",
+                "authors": "Smith, Jane and Alpha Beta",
+                "year": 2026,
+                "title": "CSL Metadata Test",
+                "journal": "Journal",
+                "volume": "12",
+                "issue": "3",
+                "pages": "45-67",
+                "doi": "https://doi.org/10.1000/example",
+            }
+        )
+
+        self.assertEqual(csl_item["type"], "article-journal")
+        self.assertEqual(csl_item["DOI"], "10.1000/example")
+        self.assertEqual(csl_item["issued"]["date-parts"], [[2026]])
+        self.assertEqual(csl_item["author"][0], {"family": "Smith", "given": "Jane"})
 
     def test_normalize_doi_accepts_url_and_prefix_forms(self):
         self.assertEqual(

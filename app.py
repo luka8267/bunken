@@ -45,10 +45,12 @@ from paper_utils import (
     SORT_OPTIONS,
     build_document_citation_export_rows,
     create_collection,
+    create_pdf_annotation,
     create_user_paper,
     create_pdf_signed_url,
     delete_collection,
     delete_paper,
+    delete_pdf_annotation,
     delete_pdf_from_storage,
     delete_user_document,
     export_to_bibtex_text,
@@ -57,6 +59,7 @@ from paper_utils import (
     extract_doi_from_pdf_bytes,
     extract_title_from_pdf_bytes,
     fetch_collection_counts,
+    fetch_pdf_annotations,
     fetch_document_citations,
     fetch_paper_collection_ids,
     fetch_papers_for_collection,
@@ -75,6 +78,8 @@ from paper_utils import (
     make_bibtex_entry,
     make_ris_entry,
     make_word_citation,
+    CSL_STYLE_OPTIONS,
+    PDF_ANNOTATION_TYPES,
     merge_duplicate_paper,
     move_paper,
     normalize_doi,
@@ -90,6 +95,7 @@ from paper_utils import (
     set_paper_collections,
     sort_papers_dataframe,
     update_collection,
+    update_pdf_annotation,
     update_paper_details,
     update_paper_files,
     upload_pdf_to_storage,
@@ -370,6 +376,20 @@ def render_compact_paper_card(record, is_selected, marker_html):
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_csl_style_selector(key, label="引用スタイル"):
+    style_labels = list(CSL_STYLE_OPTIONS.keys()) + ["CSL IDを指定"]
+    selected_label = st.selectbox(label, style_labels, key=f"{key}_label")
+    if selected_label == "CSL IDを指定":
+        custom_style = st.text_input(
+            "CSLスタイルID",
+            value=st.session_state.get(f"{key}_custom", "apa"),
+            help="例: apa, nature, vancouver, american-chemical-society, ieee",
+            key=f"{key}_custom",
+        )
+        return custom_style.strip() or "apa", custom_style.strip() or "apa"
+    return selected_label, CSL_STYLE_OPTIONS[selected_label]
 
 
 def normalize_author_list_compat(authors):
@@ -1102,7 +1122,175 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     return page_count, safe_page_number, pixmap.tobytes("png")
 
 
-def render_paper_pdf_preview(paper, key_prefix="paper"):
+def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"):
+    paper_id = str(paper.get("id"))
+    try:
+        annotations = fetch_pdf_annotations(supabase, user_id, paper_id)
+    except Exception:
+        logger.exception("Failed to fetch PDF annotations")
+        st.warning("PDF注釈を取得できませんでした。migration と RLS を確認してください。")
+        annotations = []
+
+    current_page_annotations = [
+        annotation
+        for annotation in annotations
+        if int(annotation.get("page_number") or 1) == int(page_number or 1)
+    ]
+    st.markdown("#### PDF注釈")
+    st.caption(
+        f"このページ: {len(current_page_annotations)}件 / このPDF全体: {len(annotations)}件"
+    )
+    type_labels = {value: key for key, value in PDF_ANNOTATION_TYPES.items()}
+    form_key = f"{key_prefix}_pdf_annotation_form_{paper_id}_{page_number}"
+    with st.form(form_key):
+        annotation_type_label = st.selectbox(
+            "種類",
+            list(type_labels.keys()),
+            index=1,
+            key=f"{form_key}_type",
+        )
+        selected_text = st.text_area(
+            "ハイライトした文・引用したい文",
+            height=90,
+            key=f"{form_key}_selected_text",
+        )
+        note = st.text_area(
+            "メモ",
+            height=100,
+            key=f"{form_key}_note",
+        )
+        color = st.selectbox(
+            "色",
+            ["#fff6db", "#e6f4f1", "#eaf1ff", "#fee7e7"],
+            format_func={
+                "#fff6db": "黄",
+                "#e6f4f1": "緑",
+                "#eaf1ff": "青",
+                "#fee7e7": "赤",
+            }.get,
+            key=f"{form_key}_color",
+        )
+        submitted = st.form_submit_button("このページに注釈を追加")
+        if submitted:
+            if not selected_text.strip() and not note.strip():
+                st.error("ハイライト文またはメモを入力してください。")
+            else:
+                try:
+                    create_pdf_annotation(
+                        supabase,
+                        user_id,
+                        paper_id,
+                        page_number,
+                        type_labels[annotation_type_label],
+                        selected_text,
+                        note,
+                        color,
+                    )
+                    st.success("PDF注釈を追加しました。")
+                    st.rerun()
+                except Exception:
+                    logger.exception("Failed to create PDF annotation")
+                    st.error("PDF注釈の追加に失敗しました。migration と RLS を確認してください。")
+
+    if not annotations:
+        st.info("このPDFにはまだ注釈がありません。")
+        return
+
+    annotation_tabs = st.tabs(["このページ", "全ページ"])
+    for tab, visible_annotations in (
+        (annotation_tabs[0], current_page_annotations),
+        (annotation_tabs[1], annotations),
+    ):
+        with tab:
+            if not visible_annotations:
+                st.write("注釈はありません。")
+                continue
+            for annotation in visible_annotations:
+                annotation_id = annotation["id"]
+                label = PDF_ANNOTATION_TYPES.get(
+                    annotation.get("annotation_type"),
+                    annotation.get("annotation_type") or "注釈",
+                )
+                with st.expander(
+                    f"p.{annotation.get('page_number')} / {label} / {annotation.get('updated_at') or annotation.get('created_at') or ''}",
+                    expanded=False,
+                ):
+                    edit_type_label = st.selectbox(
+                        "種類",
+                        list(type_labels.keys()),
+                        index=list(type_labels.values()).index(
+                            annotation.get("annotation_type")
+                            if annotation.get("annotation_type") in type_labels.values()
+                            else "page_note"
+                        ),
+                        key=f"{key_prefix}_annotation_type_{annotation_id}",
+                    )
+                    edit_selected_text = st.text_area(
+                        "ハイライトした文・引用したい文",
+                        value=annotation.get("selected_text") or "",
+                        height=90,
+                        key=f"{key_prefix}_annotation_selected_{annotation_id}",
+                    )
+                    edit_note = st.text_area(
+                        "メモ",
+                        value=annotation.get("note") or "",
+                        height=100,
+                        key=f"{key_prefix}_annotation_note_{annotation_id}",
+                    )
+                    edit_color = st.selectbox(
+                        "色",
+                        ["#fff6db", "#e6f4f1", "#eaf1ff", "#fee7e7"],
+                        index=["#fff6db", "#e6f4f1", "#eaf1ff", "#fee7e7"].index(
+                            annotation.get("color")
+                            if annotation.get("color") in ["#fff6db", "#e6f4f1", "#eaf1ff", "#fee7e7"]
+                            else "#fff6db"
+                        ),
+                        format_func={
+                            "#fff6db": "黄",
+                            "#e6f4f1": "緑",
+                            "#eaf1ff": "青",
+                            "#fee7e7": "赤",
+                        }.get,
+                        key=f"{key_prefix}_annotation_color_{annotation_id}",
+                    )
+                    action_col1, action_col2 = st.columns(2)
+                    with action_col1:
+                        if st.button(
+                            "注釈を保存",
+                            key=f"{key_prefix}_annotation_save_{annotation_id}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                update_pdf_annotation(
+                                    supabase,
+                                    user_id,
+                                    annotation_id,
+                                    type_labels[edit_type_label],
+                                    edit_selected_text,
+                                    edit_note,
+                                    edit_color,
+                                )
+                                st.success("注釈を更新しました。")
+                                st.rerun()
+                            except Exception:
+                                logger.exception("Failed to update PDF annotation")
+                                st.error("注釈の更新に失敗しました。")
+                    with action_col2:
+                        if st.button(
+                            "注釈を削除",
+                            key=f"{key_prefix}_annotation_delete_{annotation_id}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                delete_pdf_annotation(supabase, user_id, annotation_id)
+                                st.success("注釈を削除しました。")
+                                st.rerun()
+                            except Exception:
+                                logger.exception("Failed to delete PDF annotation")
+                                st.error("注釈の削除に失敗しました。")
+
+
+def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
     signed_url = create_pdf_signed_url(supabase, paper.get("pdf_path"), 3600)
     if not signed_url:
         st.caption("PDFは添付されていません。")
@@ -1153,6 +1341,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
                 use_container_width=True,
             )
 
+    annotations_rendered = False
     if show_embed:
         if not pdf_bytes:
             st.info("アプリ内表示用のPDFを取得できませんでした。「PDFを開く」またはダウンロードを使ってください。")
@@ -1190,6 +1379,21 @@ def render_paper_pdf_preview(paper, key_prefix="paper"):
                 st.caption(
                     f"ページ {rendered_page} / {page_count}。Brave対策としてPDFを画像化して表示しています。"
                 )
+                if user_id:
+                    render_pdf_annotations(
+                        paper,
+                        user_id,
+                        rendered_page,
+                        key_prefix=key_prefix,
+                    )
+                    annotations_rendered = True
+    if user_id and not annotations_rendered:
+        render_pdf_annotations(
+            paper,
+            user_id,
+            st.session_state[page_key],
+            key_prefix=key_prefix,
+        )
 
 
 def render_reading_workflow(paper, user_id, key_prefix="reading"):
@@ -2945,7 +3149,11 @@ elif menu == "一覧":
                         if paper_url:
                             st.link_button("Web", paper_url, use_container_width=True)
                 with quick_tabs[1]:
-                    render_paper_pdf_preview(selected_list_paper, key_prefix="list_pane")
+                    render_paper_pdf_preview(
+                        selected_list_paper,
+                        key_prefix="list_pane",
+                        user_id=user_id,
+                    )
                 with quick_tabs[2]:
                     render_reading_workflow(
                         selected_list_paper,
@@ -2960,16 +3168,14 @@ elif menu == "一覧":
                         key_prefix="list_pane",
                     )
                 with quick_tabs[4]:
-                    citation_style = st.segmented_control(
-                        "引用スタイル",
-                        ["APA", "Vancouver", "Nature"],
-                        default="APA",
-                        key=f"list_pane_citation_style_{selected_list_paper['id']}",
+                    citation_style_label, citation_style = render_csl_style_selector(
+                        f"list_pane_citation_style_{selected_list_paper['id']}",
                     )
                     citation_text = make_word_citation(
                         selected_list_paper,
                         style=citation_style,
                     )
+                    st.caption(f"CSL: {citation_style_label}")
                     st.code(citation_text)
                     citation_file_name = re.sub(
                         r"[^A-Za-z0-9._-]+",
@@ -3302,7 +3508,7 @@ elif menu == "詳細":
                 )
 
             with pdf_tab:
-                render_paper_pdf_preview(selected_paper, key_prefix="detail")
+                render_paper_pdf_preview(selected_paper, key_prefix="detail", user_id=user_id)
 
             with reading_tab:
                 render_reading_workflow(selected_paper, user_id, key_prefix="detail_reading")
@@ -3316,13 +3522,11 @@ elif menu == "詳細":
                 )
 
             with citation_tab:
-                citation_style = st.segmented_control(
-                    "引用スタイル",
-                    ["APA", "Vancouver", "Nature"],
-                    default="APA",
-                    key=f"detail_citation_style_{selected_paper['id']}",
+                citation_style_label, citation_style = render_csl_style_selector(
+                    f"detail_citation_style_{selected_paper['id']}",
                 )
                 citation_text = make_word_citation(selected_paper, style=citation_style)
+                st.caption(f"CSL: {citation_style_label}")
                 st.code(citation_text)
                 citation_file_name = re.sub(
                     r"[^A-Za-z0-9._-]+",
@@ -3466,7 +3670,11 @@ elif menu == "PDF読書":
                     selected_pdf_paper.get("title") or "無題",
                     f"{selected_pdf_paper.get('journal') or '雑誌未設定'} / {selected_pdf_paper.get('year') or '-'}",
                 )
-                render_paper_pdf_preview(selected_pdf_paper, key_prefix="pdf_reading")
+                render_paper_pdf_preview(
+                    selected_pdf_paper,
+                    key_prefix="pdf_reading",
+                    user_id=user_id,
+                )
             with note_col:
                 render_section_header("読書メモと引用予定")
                 render_reading_workflow(
