@@ -1380,7 +1380,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                     f"ページ {rendered_page} / {page_count}。Brave対策としてPDFを画像化して表示しています。"
                 )
                 if user_id:
-                    render_pdf_annotations(
+                    render_paper_pdf_annotations(
                         paper,
                         user_id,
                         rendered_page,
@@ -1388,7 +1388,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                     )
                     annotations_rendered = True
     if user_id and not annotations_rendered:
-        render_pdf_annotations(
+        render_paper_pdf_annotations(
             paper,
             user_id,
             st.session_state[page_key],
