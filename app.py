@@ -1,10 +1,12 @@
 import base64
 import ipaddress
+import io
 import logging
 import os
 import re
 import socket
 import uuid
+import zipfile
 import html
 from html.parser import HTMLParser
 from urllib.parse import unquote, urljoin, urlparse
@@ -141,6 +143,20 @@ IMPORT_REQUIRED_FIELDS = (
     ("authors", "著者"),
     ("year", "年"),
     ("doi", "DOI"),
+)
+
+CHROME_EXTENSION_FILES = (
+    "manifest.json",
+    "popup.html",
+    "popup.css",
+    "popup.js",
+    "README.md",
+)
+CHROME_EXTENSION_RAW_BASE = (
+    "https://raw.githubusercontent.com/luka8267/word_addin/main/chrome_extension"
+)
+CHROME_EXTENSION_GITHUB_URL = (
+    "https://github.com/luka8267/word_addin/tree/main/chrome_extension"
 )
 
 supabase: Client = build_supabase_client(SUPABASE_URL, SUPABASE_KEY)
@@ -789,6 +805,43 @@ def clear_library_caches():
     fetch_collection_papers_cached.clear()
     fetch_collection_counts_cached.clear()
     get_citation_usage_map_for_refs_cached.clear()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def build_chrome_extension_zip():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_name in CHROME_EXTENSION_FILES:
+            response = requests.get(
+                f"{CHROME_EXTENSION_RAW_BASE}/{file_name}",
+                timeout=15,
+            )
+            response.raise_for_status()
+            archive.writestr(f"bunken-web-importer/{file_name}", response.content)
+    return buffer.getvalue()
+
+
+def render_chrome_extension_download_sidebar():
+    with st.sidebar.expander("Chrome拡張"):
+        st.caption("論文ページからbunkenへ直接保存する拡張機能です。")
+        try:
+            extension_zip = build_chrome_extension_zip()
+            st.download_button(
+                "拡張機能をダウンロード",
+                data=extension_zip,
+                file_name="bunken-web-importer.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
+        except Exception:
+            logger.exception("Failed to build Chrome extension zip")
+            st.warning("拡張機能zipを取得できませんでした。GitHubから取得してください。")
+        st.link_button(
+            "GitHubで開く",
+            CHROME_EXTENSION_GITHUB_URL,
+            use_container_width=True,
+        )
+        st.caption("ダウンロード後、展開して chrome://extensions の Load unpacked で読み込んでください。")
 
 
 def set_list_filters(collection_label=None, tag_label=None, smart_filter=None):
@@ -2574,6 +2627,8 @@ apply_app_shell_styles()
 st.sidebar.write(f"ログイン中: {st.session_state.get('username', '')}")
 if st.session_state.get("email"):
     st.sidebar.caption(st.session_state["email"])
+
+render_chrome_extension_download_sidebar()
 
 st.title("bunken")
 post_action_success = st.session_state.pop("post_action_success", None)
