@@ -857,7 +857,7 @@ def get_gemini_api_key():
 
 
 def split_structured_notes(notes):
-    text = notes or ""
+    text = clean_display_text(notes)
     reading = ""
     citation = ""
     base = text
@@ -878,12 +878,15 @@ def split_structured_notes(notes):
 
 def combine_structured_notes(base_note, reading_note="", citation_note=""):
     parts = []
-    if (base_note or "").strip():
-        parts.append(base_note.strip())
-    if (reading_note or "").strip():
-        parts.append(f"{READING_NOTE_MARKER}\n{reading_note.strip()}")
-    if (citation_note or "").strip():
-        parts.append(f"{CITATION_NOTE_MARKER}\n{citation_note.strip()}")
+    base_text = clean_display_text(base_note)
+    reading_text = clean_display_text(reading_note)
+    citation_text = clean_display_text(citation_note)
+    if base_text:
+        parts.append(base_text)
+    if reading_text:
+        parts.append(f"{READING_NOTE_MARKER}\n{reading_text}")
+    if citation_text:
+        parts.append(f"{CITATION_NOTE_MARKER}\n{citation_text}")
     return "\n\n".join(parts)
 
 
