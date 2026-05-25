@@ -1,6 +1,7 @@
 import base64
 import ipaddress
 import logging
+import os
 import re
 import socket
 import uuid
@@ -57,6 +58,8 @@ from paper_utils import (
     export_to_ris_text,
     export_to_word_bytes,
     extract_doi_from_pdf_bytes,
+    extract_pdf_summary_sections,
+    extract_text_from_pdf_bytes,
     extract_title_from_pdf_bytes,
     fetch_collection_counts,
     fetch_pdf_annotations,
@@ -94,6 +97,7 @@ from paper_utils import (
     search_user_papers,
     set_paper_collections,
     sort_papers_dataframe,
+    summarize_paper_with_gemini,
     update_collection,
     update_pdf_annotation,
     update_paper_details,
@@ -820,6 +824,22 @@ def has_attachment_path(value):
     if not text:
         return False
     return text.casefold() not in {"none", "null", "nan", "na", "n/a", "[]", "{}"}
+
+
+def get_optional_secret(name, default=""):
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+def get_gemini_api_key():
+    return (
+        get_optional_secret("GEMINI_API_KEY")
+        or get_optional_secret("GOOGLE_API_KEY")
+        or os.getenv("GEMINI_API_KEY", "")
+        or os.getenv("GOOGLE_API_KEY", "")
+    )
 
 
 def split_structured_notes(notes):
@@ -1561,6 +1581,120 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
         )
 
 
+def render_gemini_summary_tool(row_dict, user_id, notes_parts, key_prefix):
+    st.markdown("#### Gemini要約")
+    api_key = get_gemini_api_key()
+    if not api_key:
+        st.info("Streamlit Secrets または環境変数に GEMINI_API_KEY を設定すると、PDF要約を実行できます。")
+
+    model = st.text_input(
+        "Geminiモデル",
+        value=st.session_state.get(f"{key_prefix}_gemini_model", "gemini-2.5-flash"),
+        key=f"{key_prefix}_gemini_model",
+        help="例: gemini-2.5-flash",
+    )
+    summary_key = f"{key_prefix}_gemini_summary_{row_dict['id']}"
+    source_key = f"{key_prefix}_gemini_source_{row_dict['id']}"
+    run_disabled = not api_key or not has_attachment_path(row_dict.get("pdf_path"))
+    if not has_attachment_path(row_dict.get("pdf_path")):
+        st.caption("PDFが添付されていない文献はPDF本文から要約できません。")
+
+    if st.button(
+        "PDFから要約を生成",
+        key=f"{key_prefix}_gemini_run_{row_dict['id']}",
+        disabled=run_disabled,
+        use_container_width=True,
+    ):
+        try:
+            signed_url = create_pdf_signed_url(supabase, row_dict.get("pdf_path"), 600)
+            if not signed_url:
+                raise RuntimeError("PDFの一時URLを作成できませんでした。")
+            response = requests.get(signed_url, timeout=30)
+            response.raise_for_status()
+            pdf_text = extract_text_from_pdf_bytes(response.content)
+            sections = extract_pdf_summary_sections(pdf_text)
+            summary = summarize_paper_with_gemini(api_key, row_dict, sections, model=model)
+            if not summary:
+                raise RuntimeError("Geminiから要約本文が返りませんでした。")
+            st.session_state[summary_key] = summary
+            st.session_state[source_key] = {
+                "abstract": bool(sections.get("abstract")),
+                "introduction": bool(sections.get("introduction")),
+                "conclusion": bool(sections.get("conclusion")),
+            }
+            st.success("Gemini要約を生成しました。")
+        except Exception as error:
+            logger.exception("Failed to summarize paper with Gemini")
+            st.error(f"Gemini要約に失敗しました: {error}")
+
+    summary_text = st.session_state.get(summary_key, "")
+    source_flags = st.session_state.get(source_key) or {}
+    if source_flags:
+        found_labels = [
+            label
+            for label, key in (
+                ("Abstract", "abstract"),
+                ("Introduction", "introduction"),
+                ("Conclusion/Summary", "conclusion"),
+            )
+            if source_flags.get(key)
+        ]
+        st.caption("抽出できたセクション: " + (", ".join(found_labels) if found_labels else "自動抽出なし、本文冒頭を使用"))
+    if summary_text:
+        edited_summary = st.text_area(
+            "要約結果",
+            value=summary_text,
+            height=260,
+            key=f"{key_prefix}_gemini_summary_edit_{row_dict['id']}",
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(
+                "読書メモに追記",
+                key=f"{key_prefix}_gemini_save_reading_{row_dict['id']}",
+                use_container_width=True,
+            ):
+                current_reading = notes_parts["reading"]
+                next_reading = "\n\n".join(
+                    part
+                    for part in [
+                        current_reading,
+                        f"--- Gemini要約 ---\n{edited_summary.strip()}",
+                    ]
+                    if part.strip()
+                )
+                update_paper_details(
+                    supabase,
+                    user_id,
+                    row_dict["id"],
+                    row_dict.get("status") or "読書中",
+                    combine_structured_notes(
+                        notes_parts["base"],
+                        next_reading,
+                        notes_parts["citation"],
+                    ),
+                    normalize_url(row_dict.get("url")) or None,
+                    item_id=clean_optional_id(row_dict.get("item_id")),
+                    doi=normalize_doi(row_dict.get("doi")),
+                    volume=row_dict.get("volume") or "",
+                    issue=row_dict.get("issue") or "",
+                    pages=row_dict.get("pages") or "",
+                    publisher=row_dict.get("publisher") or "",
+                )
+                clear_library_caches()
+                st.success("Gemini要約を読書メモに追記しました。")
+                st.rerun()
+        with col2:
+            st.download_button(
+                "要約をMarkdown保存",
+                data=edited_summary.encode("utf-8"),
+                file_name=f"gemini-summary-{row_dict['id']}.md",
+                mime="text/markdown",
+                key=f"{key_prefix}_gemini_download_{row_dict['id']}",
+                use_container_width=True,
+            )
+
+
 def render_reading_workflow(paper, user_id, key_prefix="reading"):
     row_dict = dict(paper)
     notes_parts = split_structured_notes(row_dict.get("notes"))
@@ -1621,6 +1755,13 @@ def render_reading_workflow(paper, user_id, key_prefix="reading"):
         height=120,
         key=f"{key_prefix}_citation_note_{row_dict['id']}",
     )
+    with st.expander("Gemini要約", expanded=False):
+        render_gemini_summary_tool(
+            row_dict,
+            user_id,
+            {"base": base_note, "reading": reading_note, "citation": citation_note},
+            key_prefix,
+        )
     if st.button(
         "読書メモを保存",
         key=f"{key_prefix}_save_{row_dict['id']}",

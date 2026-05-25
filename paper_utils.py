@@ -31,8 +31,16 @@ try:
 except ImportError:
     APIError = Exception
 
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None
+    genai_types = None
+
 BUCKET_NAME = "paper-pdfs"
 PAPER_ITEMS_VIEW = "paper_items_view"
+PDF_SUMMARY_MAX_CHARS = 60000
 ITEM_METADATA_COLUMNS = ("volume", "issue", "pages", "publisher", "item_type")
 SAFE_STORAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 SAFE_STORAGE_EXT_RE = re.compile(r"[^A-Za-z0-9]")
@@ -2297,6 +2305,134 @@ def extract_title_from_pdf_bytes(pdf_bytes):
     if not candidates:
         return ""
     return max(candidates[:8], key=len)[:300]
+
+
+def extract_text_from_pdf_bytes(pdf_bytes, max_pages=20, max_chars=PDF_SUMMARY_MAX_CHARS):
+    if PdfReader is None:
+        return ""
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+    except Exception:
+        return ""
+    text_parts = []
+    for page in reader.pages[:max_pages]:
+        try:
+            text_parts.append(page.extract_text() or "")
+        except Exception:
+            continue
+        if sum(len(part) for part in text_parts) >= max_chars:
+            break
+    text = "\n".join(text_parts)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text[:max_chars].strip()
+
+
+def extract_pdf_summary_sections(pdf_text):
+    text = (pdf_text or "").strip()
+    if not text:
+        return {"abstract": "", "introduction": "", "conclusion": "", "fallback": ""}
+
+    heading_patterns = {
+        "abstract": r"(?:^|\n)\s*(?:abstract|summary)\s*(?:\n|$)",
+        "introduction": r"(?:^|\n)\s*(?:\d+\.?\s*)?introduction\s*(?:\n|$)",
+        "conclusion": (
+            r"(?:^|\n)\s*(?:\d+\.?\s*)?"
+            r"(?:conclusion|conclusions|summary and conclusions|concluding remarks)\s*(?:\n|$)"
+        ),
+    }
+    stop_pattern = re.compile(
+        r"(?:^|\n)\s*(?:\d+\.?\s*)?"
+        r"(?:abstract|keywords?|introduction|methods?|materials and methods|results|discussion|"
+        r"conclusion|conclusions|summary|acknowledg(?:e)?ments?|references|bibliography)\s*(?:\n|$)",
+        re.IGNORECASE,
+    )
+
+    def section_after(pattern, limit):
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            return ""
+        start = match.end()
+        next_match = stop_pattern.search(text, start)
+        end = next_match.start() if next_match else min(len(text), start + limit)
+        section = text[start:end].strip()
+        section = re.sub(r"\n+", "\n", section)
+        return section[:limit].strip()
+
+    return {
+        "abstract": section_after(heading_patterns["abstract"], 8000),
+        "introduction": section_after(heading_patterns["introduction"], 16000),
+        "conclusion": section_after(heading_patterns["conclusion"], 12000),
+        "fallback": text[:24000],
+    }
+
+
+def summarize_paper_with_gemini(
+    api_key,
+    paper,
+    sections,
+    model="gemini-2.5-flash",
+):
+    if genai is None:
+        raise RuntimeError("google-genai がインストールされていません。requirements.txt を確認してください。")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY が設定されていません。")
+
+    source_sections = {
+        "Abstract": sections.get("abstract") or "",
+        "Introduction": sections.get("introduction") or "",
+        "Conclusion/Summary": sections.get("conclusion") or "",
+    }
+    if not any(value.strip() for value in source_sections.values()):
+        source_sections["本文冒頭"] = sections.get("fallback") or ""
+    source_text = "\n\n".join(
+        f"## {label}\n{value.strip()}"
+        for label, value in source_sections.items()
+        if value.strip()
+    )
+    if not source_text.strip():
+        raise ValueError("PDFから要約に使える本文を抽出できませんでした。")
+
+    prompt = f"""
+あなたは研究論文を読む日本語の研究支援アシスタントです。
+以下の論文情報とPDF抽出テキストをもとに、本文に書かれている範囲だけで要約してください。
+推測で補わず、不明な点は「不明」と書いてください。
+
+論文タイトル: {paper.get("title") or "不明"}
+著者: {paper.get("authors") or "不明"}
+掲載誌/年: {paper.get("journal") or "不明"} / {paper.get("year") or "不明"}
+DOI: {paper.get("doi") or "不明"}
+
+出力形式:
+### 全体要約
+- 3〜5点
+
+### Abstractの要点
+- 2〜4点
+
+### Introductionの要点
+- 2〜4点
+
+### まとめ・結論の要点
+- 2〜4点
+
+### 読むときの注目点
+- 2〜4点
+
+PDF抽出テキスト:
+{source_text[:PDF_SUMMARY_MAX_CHARS]}
+""".strip()
+
+    client = genai.Client(api_key=api_key)
+    config = None
+    if genai_types is not None:
+        config = genai_types.GenerateContentConfig(temperature=0.2)
+    response = client.models.generate_content(
+        model=model or "gemini-2.5-flash",
+        contents=prompt,
+        config=config,
+    )
+    return (getattr(response, "text", None) or "").strip()
 
 
 def export_to_word_bytes(papers):

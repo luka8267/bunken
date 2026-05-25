@@ -10,6 +10,7 @@ from paper_utils import (
     delete_user_document,
     export_to_bibtex_text,
     export_to_ris_text,
+    extract_pdf_summary_sections,
     extract_title_from_pdf_bytes,
     fetch_collection_counts,
     fetch_duplicate_merge_backups,
@@ -155,6 +156,28 @@ class PaperUtilsCollectionTests(unittest.TestCase):
 
         self.assertEqual([paper["title"] for paper in with_pdf], ["A"])
         self.assertEqual([paper["title"] for paper in without_attachment], ["B", "C", "D"])
+
+    def test_extract_pdf_summary_sections_finds_main_sections(self):
+        sections = extract_pdf_summary_sections(
+            """
+            Abstract
+            This work studies methyl-pi interactions.
+            Keywords
+            bonding
+            1. Introduction
+            The introduction explains the research gap.
+            Methods
+            Experimental details.
+            Conclusions
+            The paper concludes that the interaction has limits.
+            References
+            [1] Example
+            """
+        )
+
+        self.assertIn("methyl-pi", sections["abstract"])
+        self.assertIn("research gap", sections["introduction"])
+        self.assertIn("interaction has limits", sections["conclusion"])
 
     def test_paper_to_csl_json_maps_publication_metadata(self):
         csl_item = paper_to_csl_json(

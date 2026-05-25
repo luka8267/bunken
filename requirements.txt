@@ -6,4 +6,5 @@ pypdf
 PyMuPDF
 citeproc-py
 citeproc-py-styles
+google-genai
 supabase==2.18.1
