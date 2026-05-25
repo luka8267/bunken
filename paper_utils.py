@@ -128,6 +128,16 @@ def normalize_optional_db_value(value):
     return value
 
 
+def has_attachment_path(value):
+    value = normalize_json_value(value)
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    return text.casefold() not in {"none", "null", "nan", "na", "n/a", "[]", "{}"}
+
+
 def normalize_text_db_value(value):
     value = normalize_json_value(value)
     if value is None:
@@ -398,8 +408,8 @@ def filter_papers(
         if status and paper.get("status") != status:
             continue
 
-        has_pdf = bool(paper.get("pdf_path"))
-        has_supporting = bool(paper.get("supporting_path"))
+        has_pdf = has_attachment_path(paper.get("pdf_path"))
+        has_supporting = has_attachment_path(paper.get("supporting_path"))
         if attachment_filter == "PDFあり" and not has_pdf:
             continue
         if attachment_filter == "補足資料あり" and not has_supporting:

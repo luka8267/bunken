@@ -808,6 +808,20 @@ def clean_optional_id(value):
     return text or None
 
 
+def has_attachment_path(value):
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except TypeError:
+        pass
+    text = str(value).strip()
+    if not text:
+        return False
+    return text.casefold() not in {"none", "null", "nan", "na", "n/a", "[]", "{}"}
+
+
 def split_structured_notes(notes):
     text = notes or ""
     reading = ""
@@ -2052,7 +2066,7 @@ def update_existing_paper_from_import(existing_record, candidate, user_id, pdf_f
             .eq("user_id", user_id)
             .execute()
         )
-    if pdf_file and not existing_record.get("pdf_path"):
+    if pdf_file and not has_attachment_path(existing_record.get("pdf_path")):
         pdf_path = upload_pdf_to_storage(supabase, pdf_file, user_id)
         update_paper_files(
             supabase,
@@ -2610,11 +2624,11 @@ elif menu == "一覧":
         ]
     elif smart_filter == "PDFなし":
         filtered_records = [
-            record for record in filtered_records if not record.get("pdf_path")
+            record for record in filtered_records if not has_attachment_path(record.get("pdf_path"))
         ]
     elif smart_filter == "PDFあり":
         filtered_records = [
-            record for record in filtered_records if record.get("pdf_path")
+            record for record in filtered_records if has_attachment_path(record.get("pdf_path"))
         ]
     elif smart_filter == "未読":
         filtered_records = [
@@ -2641,7 +2655,7 @@ elif menu == "一覧":
         with metric_col3:
             render_kpi("DOIなし", f"{sum(1 for record in filtered_records if not normalize_doi(record.get('doi')))}件")
         with metric_col4:
-            render_kpi("PDFなし", f"{sum(1 for record in filtered_records if not record.get('pdf_path'))}件")
+            render_kpi("PDFなし", f"{sum(1 for record in filtered_records if not has_attachment_path(record.get('pdf_path')))}件")
 
     sort_option = st.selectbox("並び替え", SORT_OPTIONS)
     added_oldest_first = st.session_state.get("list_added_oldest_first", False)
@@ -3084,12 +3098,12 @@ elif menu == "一覧":
                     (
                         "PDFなし",
                         "PDFなし",
-                        sum(1 for record in scoped_records if not record.get("pdf_path")),
+                        sum(1 for record in scoped_records if not has_attachment_path(record.get("pdf_path"))),
                     ),
                     (
                         "PDFあり",
                         "PDFあり",
-                        sum(1 for record in scoped_records if record.get("pdf_path")),
+                        sum(1 for record in scoped_records if has_attachment_path(record.get("pdf_path"))),
                     ),
                     (
                         "未読",
@@ -3199,7 +3213,7 @@ elif menu == "一覧":
                     missing_metadata_text = format_missing_publication_metadata(record)
 
                     marker_html_parts = []
-                    if record.get("pdf_path"):
+                    if has_attachment_path(record.get("pdf_path")):
                         marker_html_parts.append(make_status_pill("PDFあり", "accent"))
                     else:
                         marker_html_parts.append(make_status_pill("PDFなし", "danger"))
@@ -3752,7 +3766,7 @@ elif menu == "PDF読書":
                 "pages, publisher, item_type, status, notes, pdf_path, supporting_path, display_order"
             ),
         )
-        pdf_papers = [paper for paper in (result.data or []) if paper.get("pdf_path")]
+        pdf_papers = [paper for paper in (result.data or []) if has_attachment_path(paper.get("pdf_path"))]
     except Exception:
         logger.exception("Failed to fetch papers for PDF reading")
         st.error("PDF付き文献を取得できませんでした。")
@@ -4536,7 +4550,7 @@ elif menu == "重複確認":
                         st.write("メモ:")
                         st.write(paper["notes"])
                     attachments = []
-                    if paper.get("pdf_path"):
+                    if has_attachment_path(paper.get("pdf_path")):
                         attachments.append("PDF")
                     if paper.get("supporting_path"):
                         attachments.append("補足資料")

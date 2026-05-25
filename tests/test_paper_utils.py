@@ -14,10 +14,12 @@ from paper_utils import (
     fetch_collection_counts,
     fetch_duplicate_merge_backups,
     fetch_paper_collection_ids,
+    filter_papers,
     filter_document_citations,
     find_duplicate_paper_groups,
     get_document_citation_usage_map,
     get_tag_map_for_papers,
+    has_attachment_path,
     make_bibtex_entry,
     make_ris_entry,
     make_word_citation,
@@ -131,6 +133,28 @@ class PaperUtilsCollectionTests(unittest.TestCase):
 
         self.assertIn("Journal, 12(3), 45", citation)
         self.assertIn("https://doi.org/10.1000/example", citation)
+
+    def test_has_attachment_path_rejects_placeholder_values(self):
+        self.assertFalse(has_attachment_path(None))
+        self.assertFalse(has_attachment_path(""))
+        self.assertFalse(has_attachment_path("  "))
+        self.assertFalse(has_attachment_path("nan"))
+        self.assertFalse(has_attachment_path("null"))
+        self.assertTrue(has_attachment_path("user-id/paper.pdf"))
+
+    def test_filter_papers_uses_normalized_attachment_presence(self):
+        papers = [
+            {"title": "A", "pdf_path": "user-id/a.pdf"},
+            {"title": "B", "pdf_path": "  "},
+            {"title": "C", "pdf_path": "nan"},
+            {"title": "D", "pdf_path": None},
+        ]
+
+        with_pdf = filter_papers(papers, attachment_filter="PDFあり")
+        without_attachment = filter_papers(papers, attachment_filter="添付なし")
+
+        self.assertEqual([paper["title"] for paper in with_pdf], ["A"])
+        self.assertEqual([paper["title"] for paper in without_attachment], ["B", "C", "D"])
 
     def test_paper_to_csl_json_maps_publication_metadata(self):
         csl_item = paper_to_csl_json(
