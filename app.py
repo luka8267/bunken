@@ -1287,6 +1287,51 @@ def render_paper_edit_form(
             st.error("更新に失敗しました。入力内容とログを確認してください。")
 
 
+def render_paper_delete_control(paper, user_id, key_prefix="paper"):
+    row_dict = dict(paper)
+    paper_id = row_dict.get("id")
+    if not paper_id:
+        return
+
+    with st.expander("文献を削除"):
+        st.warning("この操作は文献、タグ/コレクション関連付け、添付ファイルを削除します。")
+        st.caption("削除する場合は「削除」と入力してください。Word引用で使われている文献は削除できません。")
+        confirm = st.text_input(
+            "確認",
+            key=f"{key_prefix}_delete_confirm_{paper_id}",
+        )
+        if st.button(
+            "この文献を削除",
+            key=f"{key_prefix}_delete_button_{paper_id}",
+            disabled=confirm != "削除",
+            use_container_width=True,
+        ):
+            reference_ids = [
+                value
+                for value in (paper_id, clean_optional_id(row_dict.get("item_id")))
+                if value is not None
+            ]
+            try:
+                if paper_has_document_citation_refs(supabase, user_id, reference_ids):
+                    st.error("Word引用で使われている文献は削除できません。先に引用を削除または統合してください。")
+                    return
+                delete_result = delete_paper(supabase, user_id, row_dict)
+                clear_library_caches()
+                st.success("文献を削除しました。")
+                if delete_result.get("storage_errors"):
+                    st.session_state["post_action_warning"] = (
+                        "DBからは削除しましたが、Storageファイル削除に失敗しました: "
+                        + " / ".join(delete_result["storage_errors"])
+                    )
+                for key in ("list_selected_paper_id", "detail_selected_paper_id"):
+                    if str(st.session_state.get(key, "")) == str(paper_id):
+                        st.session_state.pop(key, None)
+                st.rerun()
+            except Exception as error:
+                logger.exception("Failed to delete paper")
+                st.error(f"削除に失敗しました: {error}")
+
+
 def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
     row_dict = dict(paper)
     current_tags = ", ".join(get_paper_tag_list(tag_map, row_dict))
@@ -3563,6 +3608,11 @@ elif menu == "一覧":
                         collection_id_by_label=collection_id_by_label,
                         key_prefix="list_pane_edit",
                     )
+                    render_paper_delete_control(
+                        selected_list_paper,
+                        user_id,
+                        key_prefix="list_pane_edit",
+                    )
             st.stop()
 
         for _, row in df.iterrows():
@@ -3914,6 +3964,11 @@ elif menu == "詳細":
                     collections=collections,
                     collection_label_by_id=collection_label_by_id,
                     collection_id_by_label=collection_id_by_label,
+                    key_prefix="detail",
+                )
+                render_paper_delete_control(
+                    selected_paper,
+                    user_id,
                     key_prefix="detail",
                 )
 
