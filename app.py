@@ -1317,7 +1317,7 @@ def render_paper_delete_control(paper, user_id, key_prefix="paper"):
                     return
                 delete_result = delete_paper(supabase, user_id, row_dict)
                 clear_library_caches()
-                st.success("文献を削除しました。")
+                st.session_state["post_action_success"] = "文献を削除しました。"
                 if delete_result.get("storage_errors"):
                     st.session_state["post_action_warning"] = (
                         "DBからは削除しましたが、Storageファイル削除に失敗しました: "
@@ -2576,6 +2576,9 @@ if st.session_state.get("email"):
     st.sidebar.caption(st.session_state["email"])
 
 st.title("bunken")
+post_action_success = st.session_state.pop("post_action_success", None)
+if post_action_success:
+    st.success(post_action_success)
 post_action_warning = st.session_state.pop("post_action_warning", None)
 if post_action_warning:
     st.warning(post_action_warning)
@@ -3736,7 +3739,7 @@ elif menu == "一覧":
                         if st.button("削除", key=f"del_{row_dict['id']}", use_container_width=True):
                             delete_result = delete_paper(supabase, user_id, row_dict)
                             clear_library_caches()
-                            st.success("削除しました")
+                            st.session_state["post_action_success"] = "文献を削除しました。"
                             if delete_result.get("storage_errors"):
                                 st.session_state["post_action_warning"] = (
                                     "DBからは削除しましたが、Storageファイル削除に失敗しました: "
@@ -4964,7 +4967,7 @@ elif menu == "重複確認":
                                         delete_result.get("storage_errors", [])
                                     )
                                 clear_library_caches()
-                                st.success("選択した文献を削除しました。")
+                                st.session_state["post_action_success"] = "選択した文献を削除しました。"
                                 if storage_errors:
                                     st.session_state["post_action_warning"] = (
                                         "DBからは削除しましたが、Storageファイル削除に失敗しました: "
