@@ -98,7 +98,6 @@ from paper_utils import (
     update_pdf_annotation,
     update_paper_details,
     update_paper_files,
-    update_user_document_style,
     upload_pdf_to_storage,
     upload_supporting_file_to_storage,
 )
@@ -467,6 +466,34 @@ def delete_document_citation_compat(supabase_client, citation_id):
     if helper:
         return helper(supabase_client, citation_id)
     return supabase_client.table("document_citations").delete().eq("id", citation_id).execute()
+
+
+def update_user_document_style_compat(
+    supabase_client,
+    user_id,
+    document_id,
+    citation_style,
+    locale=None,
+):
+    helper = getattr(paper_utils_module, "update_user_document_style", None)
+    if helper:
+        return helper(
+            supabase_client,
+            user_id,
+            document_id,
+            citation_style,
+            locale=locale,
+        )
+    fields = {"citation_style": normalize_optional_text(citation_style) or "vancouver"}
+    if locale is not None:
+        fields["locale"] = normalize_optional_text(locale)
+    return (
+        supabase_client.table("documents")
+        .update(fields)
+        .eq("id", document_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
 
 
 def restore_duplicate_from_merge_backup_compat(supabase_client, user_id, backup):
@@ -4783,7 +4810,7 @@ elif menu == "文書引用":
                 use_container_width=True,
             ):
                 try:
-                    update_user_document_style(
+                    update_user_document_style_compat(
                         supabase,
                         user_id,
                         selected_document["id"],
