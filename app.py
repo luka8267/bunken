@@ -812,6 +812,20 @@ def clean_optional_id(value):
     return text or None
 
 
+def clean_display_text(value):
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if text.casefold() in {"none", "null", "nan", "na", "n/a"}:
+        return ""
+    return text
+
+
 def has_attachment_path(value):
     if value is None:
         return False
@@ -986,21 +1000,30 @@ def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=
 
     ref_no = paper.get("ref_no")
     heading_prefix = f"[{ref_no}] " if ref_no else ""
-    st.markdown(f"### {heading_prefix}{paper.get('title') or '無題'}")
+    title = clean_display_text(paper.get("title")) or "無題"
+    authors = clean_display_text(paper.get("authors"))
+    journal = clean_display_text(paper.get("journal"))
+    year = clean_display_text(paper.get("year"))
+    volume = clean_display_text(paper.get("volume"))
+    issue_value = clean_display_text(paper.get("issue"))
+    pages = clean_display_text(paper.get("pages"))
+    publisher = clean_display_text(paper.get("publisher"))
+
+    st.markdown(f"### {heading_prefix}{title}")
     if show_id:
         st.caption(f"ID: {paper.get('id')}")
-    if paper.get("authors"):
-        st.write(f"著者: {paper.get('authors')}")
-    if paper.get("journal") or paper.get("year"):
-        st.write(f"雑誌: {paper.get('journal') or ''} ({paper.get('year') or '-'})")
+    if authors:
+        st.write(f"著者: {authors}")
+    if journal or year:
+        st.write(f"雑誌: {journal} ({year or '-'})")
     publication_parts = []
-    if paper.get("volume"):
-        issue = f"({paper.get('issue')})" if paper.get("issue") else ""
-        publication_parts.append(f"{paper.get('volume')}{issue}")
-    if paper.get("pages"):
-        publication_parts.append(f"pp. {paper.get('pages')}")
-    if paper.get("publisher"):
-        publication_parts.append(paper.get("publisher"))
+    if volume:
+        issue = f"({issue_value})" if issue_value else ""
+        publication_parts.append(f"{volume}{issue}")
+    if pages:
+        publication_parts.append(f"pp. {pages}")
+    if publisher:
+        publication_parts.append(publisher)
     if publication_parts:
         st.caption(" / ".join(publication_parts))
     missing_metadata_text = format_missing_publication_metadata(paper)
