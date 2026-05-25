@@ -94,7 +94,6 @@ from paper_utils import (
     restore_keeper_from_merge_backup,
     save_tags_for_paper,
     save_tags_for_item,
-    search_user_papers,
     set_paper_collections,
     sort_papers_dataframe,
     summarize_paper_with_gemini,
@@ -488,9 +487,10 @@ def update_user_document_style_compat(
             citation_style,
             locale=locale,
         )
-    fields = {"citation_style": normalize_optional_text(citation_style) or "vancouver"}
+    normalized_style = str(citation_style or "").strip() or "vancouver"
+    fields = {"citation_style": normalized_style}
     if locale is not None:
-        fields["locale"] = normalize_optional_text(locale)
+        fields["locale"] = str(locale or "").strip() or None
     return (
         supabase_client.table("documents")
         .update(fields)
