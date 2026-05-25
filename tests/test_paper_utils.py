@@ -210,6 +210,12 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         )
         self.assertEqual(normalize_doi("doi: 10.1000/Example"), "10.1000/Example")
 
+    def test_normalize_doi_handles_non_string_values(self):
+        self.assertEqual(normalize_doi(None), "")
+        self.assertEqual(normalize_doi(float("nan")), "")
+        self.assertEqual(normalize_doi(0), "")
+        self.assertEqual(normalize_doi(10.1000), "")
+
     def test_author_and_journal_normalization(self):
         self.assertEqual(
             normalize_author_list("Jane Smith and Alpha, Beta"),

@@ -154,7 +154,13 @@ def normalize_text_db_value(value):
 
 
 def normalize_doi(doi):
-    text = (doi or "").strip()
+    doi = normalize_json_value(doi)
+    if doi is None:
+        return ""
+    text = str(doi).strip()
+    if not isinstance(doi, str):
+        match = DOI_RE.search(text)
+        return match.group(0).rstrip(").,;]") if match else ""
     if not text:
         return ""
     text = re.sub(r"^doi:\s*", "", text, flags=re.IGNORECASE)
