@@ -98,6 +98,7 @@ from paper_utils import (
     update_pdf_annotation,
     update_paper_details,
     update_paper_files,
+    update_user_document_style,
     upload_pdf_to_storage,
     upload_supporting_file_to_storage,
 )
@@ -378,13 +379,27 @@ def render_compact_paper_card(record, is_selected, marker_html):
     )
 
 
-def render_csl_style_selector(key, label="引用スタイル"):
+def render_csl_style_selector(key, label="引用スタイル", default_style=None):
     style_labels = list(CSL_STYLE_OPTIONS.keys()) + ["CSL IDを指定"]
-    selected_label = st.selectbox(label, style_labels, key=f"{key}_label")
+    normalized_default = (default_style or "").strip()
+    default_label = next(
+        (
+            option_label
+            for option_label, option_value in CSL_STYLE_OPTIONS.items()
+            if option_value == normalized_default
+        ),
+        "CSL IDを指定" if normalized_default else style_labels[0],
+    )
+    selected_label = st.selectbox(
+        label,
+        style_labels,
+        index=style_labels.index(default_label),
+        key=f"{key}_label",
+    )
     if selected_label == "CSL IDを指定":
         custom_style = st.text_input(
             "CSLスタイルID",
-            value=st.session_state.get(f"{key}_custom", "apa"),
+            value=st.session_state.get(f"{key}_custom", normalized_default or "apa"),
             help="例: apa, nature, vancouver, american-chemical-society, ieee",
             key=f"{key}_custom",
         )
@@ -799,6 +814,108 @@ def combine_structured_notes(base_note, reading_note="", citation_note=""):
 
 def get_citation_planned_note(paper):
     return split_structured_notes(paper.get("notes")).get("citation", "")
+
+
+def build_annotation_citation_note(annotation):
+    page = annotation.get("page_number") or "-"
+    selected_text = (annotation.get("selected_text") or "").strip()
+    note = (annotation.get("note") or "").strip()
+    parts = [f"p.{page}"]
+    if selected_text:
+        parts.append(selected_text)
+    if note:
+        parts.append(f"メモ: {note}")
+    return " / ".join(parts)
+
+
+def append_annotation_to_citation_note(paper, user_id, annotation):
+    annotation_note = build_annotation_citation_note(annotation)
+    if not annotation_note.strip():
+        raise ValueError("引用予定メモへ反映できる注釈本文がありません。")
+
+    row_dict = dict(paper)
+    notes_parts = split_structured_notes(row_dict.get("notes"))
+    current_citation_note = notes_parts["citation"]
+    next_citation_note = current_citation_note
+    if annotation_note not in current_citation_note:
+        next_citation_note = "\n".join(
+            part for part in [current_citation_note, f"- {annotation_note}"] if part.strip()
+        )
+
+    next_notes = combine_structured_notes(
+        notes_parts["base"],
+        notes_parts["reading"],
+        next_citation_note,
+    )
+    next_status = row_dict.get("status") or "引用予定"
+    if next_status in ("未読", "読書中", "読了", ""):
+        next_status = "引用予定"
+
+    update_paper_details(
+        supabase,
+        user_id,
+        row_dict["id"],
+        next_status,
+        next_notes,
+        normalize_url(row_dict.get("url")) or None,
+        item_id=clean_optional_id(row_dict.get("item_id")),
+        doi=normalize_doi(row_dict.get("doi")),
+        volume=row_dict.get("volume") or "",
+        issue=row_dict.get("issue") or "",
+        pages=row_dict.get("pages") or "",
+        publisher=row_dict.get("publisher") or "",
+    )
+    clear_library_caches()
+
+
+def render_annotation_to_citation_button(paper, user_id, annotation, key_prefix):
+    if st.button(
+        "引用予定メモへ反映",
+        key=f"{key_prefix}_annotation_to_citation_{annotation['id']}",
+        use_container_width=True,
+    ):
+        try:
+            append_annotation_to_citation_note(paper, user_id, annotation)
+            st.success("注釈を引用予定メモへ反映しました。")
+            st.rerun()
+        except Exception as error:
+            logger.exception("Failed to append annotation to citation note")
+            st.error(f"引用予定メモへの反映に失敗しました: {error}")
+
+
+def render_pdf_annotation_summary(paper, user_id, key_prefix="paper"):
+    paper_id = str(paper.get("id"))
+    try:
+        annotations = fetch_pdf_annotations(supabase, user_id, paper_id)
+    except Exception:
+        logger.exception("Failed to fetch PDF annotation summary")
+        st.warning("PDF注釈を取得できませんでした。")
+        return
+
+    st.markdown("#### PDF注釈")
+    if not annotations:
+        st.info("この文献にはPDF注釈がまだありません。")
+        return
+
+    st.caption(f"{len(annotations)}件の注釈")
+    for annotation in annotations:
+        label = PDF_ANNOTATION_TYPES.get(
+            annotation.get("annotation_type"),
+            annotation.get("annotation_type") or "注釈",
+        )
+        with st.container():
+            st.markdown(f"**p.{annotation.get('page_number') or '-'} / {label}**")
+            if annotation.get("selected_text"):
+                st.write(annotation["selected_text"])
+            if annotation.get("note"):
+                st.caption(annotation["note"])
+            render_annotation_to_citation_button(
+                paper,
+                user_id,
+                annotation,
+                f"{key_prefix}_summary",
+            )
+            st.divider()
 
 
 def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=None):
@@ -1253,7 +1370,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                         }.get,
                         key=f"{key_prefix}_annotation_color_{annotation_id}",
                     )
-                    action_col1, action_col2 = st.columns(2)
+                    action_col1, action_col2, action_col3 = st.columns(3)
                     with action_col1:
                         if st.button(
                             "注釈を保存",
@@ -1288,6 +1405,13 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                             except Exception:
                                 logger.exception("Failed to delete PDF annotation")
                                 st.error("注釈の削除に失敗しました。")
+                    with action_col3:
+                        render_annotation_to_citation_button(
+                            paper,
+                            user_id,
+                            annotation,
+                            f"{key_prefix}_{annotation_id}",
+                        )
 
 
 def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
@@ -3155,6 +3279,11 @@ elif menu == "一覧":
                         user_id=user_id,
                     )
                 with quick_tabs[2]:
+                    render_pdf_annotation_summary(
+                        selected_list_paper,
+                        user_id,
+                        key_prefix="list_pane_annotations",
+                    )
                     render_reading_workflow(
                         selected_list_paper,
                         user_id,
@@ -4638,6 +4767,34 @@ elif menu == "文書引用":
                 except Exception as error:
                     logger.exception("Failed to delete document")
                     st.error(f"削除に失敗しました: {error}")
+
+        document_style_label, document_style = render_csl_style_selector(
+            f"document_csl_style_{selected_document['id']}",
+            label="この文書のCSLスタイル",
+            default_style=selected_document.get("citation_style") or "vancouver",
+        )
+        style_col1, style_col2 = st.columns([2, 1])
+        with style_col1:
+            st.caption(f"保存予定: {document_style_label}")
+        with style_col2:
+            if st.button(
+                "CSLスタイルを保存",
+                key=f"save_document_style_{selected_document['id']}",
+                use_container_width=True,
+            ):
+                try:
+                    update_user_document_style(
+                        supabase,
+                        user_id,
+                        selected_document["id"],
+                        document_style,
+                        locale=selected_document.get("locale") or "ja-JP",
+                    )
+                    st.success("この文書のCSLスタイルを保存しました。")
+                    st.rerun()
+                except Exception as error:
+                    logger.exception("Failed to update document CSL style")
+                    st.error(f"CSLスタイルの保存に失敗しました: {error}")
 
         try:
             citations_result = fetch_document_citations(supabase, selected_document["id"])

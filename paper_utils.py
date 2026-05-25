@@ -741,6 +741,19 @@ def fetch_user_documents(supabase, user_id):
     )
 
 
+def update_user_document_style(supabase, user_id, document_id, citation_style, locale=None):
+    fields = {"citation_style": normalize_optional_db_value(citation_style) or "vancouver"}
+    if locale is not None:
+        fields["locale"] = normalize_optional_db_value(locale)
+    return (
+        supabase.table("documents")
+        .update(fields)
+        .eq("id", document_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+
 def fetch_document_citations(supabase, document_id):
     return (
         supabase.table("document_citations")
