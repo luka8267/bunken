@@ -807,13 +807,13 @@ def clear_library_caches():
     get_citation_usage_map_for_refs_cached.clear()
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def build_chrome_extension_zip():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file_name in CHROME_EXTENSION_FILES:
             response = requests.get(
-                f"{CHROME_EXTENSION_RAW_BASE}/{file_name}",
+                f"{CHROME_EXTENSION_RAW_BASE}/{file_name}?v={uuid.uuid4().hex}",
                 timeout=15,
             )
             response.raise_for_status()
