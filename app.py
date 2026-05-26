@@ -1,6 +1,7 @@
 import base64
 import ipaddress
 import io
+import json
 import logging
 import os
 import re
@@ -821,11 +822,22 @@ def build_chrome_extension_zip():
     return buffer.getvalue()
 
 
+def get_chrome_extension_zip_version(extension_zip: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(extension_zip)) as archive:
+        manifest = json.loads(
+            archive.read("bunken-web-importer/manifest.json").decode("utf-8-sig")
+        )
+    return str(manifest.get("version") or "")
+
+
 def render_chrome_extension_download_sidebar():
     with st.sidebar.expander("Chrome拡張"):
         st.caption("論文ページからbunkenへ直接保存する拡張機能です。")
         try:
             extension_zip = build_chrome_extension_zip()
+            extension_version = get_chrome_extension_zip_version(extension_zip)
+            if extension_version:
+                st.caption(f"ダウンロード版: v{extension_version}")
             st.download_button(
                 "拡張機能をダウンロード",
                 data=extension_zip,
