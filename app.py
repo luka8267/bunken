@@ -328,6 +328,12 @@ def apply_app_shell_styles():
             font-size: 1.15rem;
             font-weight: 750;
         }
+        .bunken-multiline-text {
+            white-space: pre-wrap;
+            word-break: break-word;
+            margin: 0.2rem 0 0.65rem 0;
+            line-height: 1.5;
+        }
         @media (max-width: 900px) {
             .block-container {
                 padding-left: 0.75rem;
@@ -891,6 +897,17 @@ def clean_display_text(value):
     return text
 
 
+def render_multiline_text(value):
+    text = clean_display_text(value)
+    if not text:
+        return
+    escaped = html.escape(text)
+    st.markdown(
+        f"<div class='bunken-multiline-text'>{escaped}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def has_attachment_path(value):
     if value is None:
         return False
@@ -1105,13 +1122,13 @@ def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=
         notes_parts = split_structured_notes(paper.get("notes"))
         if notes_parts["base"]:
             st.write("メモ:")
-            st.write(notes_parts["base"])
+            render_multiline_text(notes_parts["base"])
         if notes_parts["reading"]:
             st.write("読書メモ:")
-            st.write(notes_parts["reading"])
+            render_multiline_text(notes_parts["reading"])
         if notes_parts["citation"]:
             st.write("引用予定メモ:")
-            st.write(notes_parts["citation"])
+            render_multiline_text(notes_parts["citation"])
 
     attachments = []
     if signed_url:
@@ -3712,13 +3729,13 @@ elif menu == "一覧":
                     notes_parts = split_structured_notes(row_dict.get("notes"))
                     if notes_parts["base"]:
                         st.write("メモ:")
-                        st.write(notes_parts["base"])
+                        render_multiline_text(notes_parts["base"])
                     if notes_parts["reading"]:
                         st.write("読書メモ:")
-                        st.write(notes_parts["reading"])
+                        render_multiline_text(notes_parts["reading"])
                     if notes_parts["citation"]:
                         st.write("引用予定メモ:")
-                        st.write(notes_parts["citation"])
+                        render_multiline_text(notes_parts["citation"])
 
                 attachments = []
                 if signed_url:
@@ -4840,7 +4857,7 @@ elif menu == "重複確認":
                         st.write(f"ステータス: {paper.get('status')}")
                     if paper.get("notes"):
                         st.write("メモ:")
-                        st.write(paper["notes"])
+                        render_multiline_text(paper["notes"])
                     attachments = []
                     if has_attachment_path(paper.get("pdf_path")):
                         attachments.append("PDF")
