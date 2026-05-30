@@ -70,7 +70,39 @@ Manual smoke test:
 - style switching updates existing citations
 - document citation sync shows context count
 
-## 5. Deploy
+## 5. Chrome extension checks
+
+From `C:\Users\run_r\OneDrive\ドキュメント\word_addin\word_addin`:
+
+```powershell
+node --check chrome_extension\popup.js
+node tests\test_chrome_extension.js
+python -m unittest discover -s tests -v
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Verify-ExtensionRelease.ps1
+```
+
+Authenticated production smoke test:
+
+```powershell
+$env:BUNKEN_EXTENSION_EMAIL="<bunken login email>"
+$env:BUNKEN_EXTENSION_PASSWORD="<bunken login password>"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Verify-ExtensionRelease.ps1 -RunAuthenticatedSmoke
+```
+
+Pass criteria:
+
+- GitHub raw manifest and generated ZIP report the same extension version.
+- Unauthenticated `/api/addin/extension/save` returns `401` with CORS headers.
+- First authenticated save returns an `itemId`.
+- Saving the same DOI again returns `duplicate: true`.
+- `/api/addin/papers?q=<doi>` finds the saved paper.
+- Save response includes `pdfCandidates`.
+- A public PDF candidate is saved to Supabase Storage, or the test is explicitly rerun with `-AllowPdfCandidateOnly` for a publisher that blocks server-side PDF fetching.
+- Open bunken production and confirm the saved paper is visible in the literature list.
+
+Do not print or commit access tokens, passwords, Vercel `.env` files, or Supabase service-role keys.
+
+## 6. Deploy
 
 Web app:
 
@@ -89,7 +121,7 @@ curl.exe -L "https://word-addin-sooty.vercel.app/taskpane.html"
 curl.exe -L "https://word-addin-sooty.vercel.app/api/addin/papers?_debug=version"
 ```
 
-## 6. Release notes
+## 7. Release notes
 
 Record:
 
