@@ -1,11 +1,13 @@
 import io
 import unittest
+import zipfile
 
 import pandas as pd
 from postgrest.exceptions import APIError
 
 from paper_utils import (
     build_document_citation_export_rows,
+    build_pdf_download_zip,
     create_duplicate_merge_backup,
     delete_user_document,
     export_to_bibtex_text,
@@ -105,6 +107,28 @@ class FakeSupabase:
         return Query(name, self.tables.get(name, []), self.calls, self.failures)
 
 
+class FakeStorageBucket:
+    def __init__(self, files):
+        self.files = files
+
+    def download(self, path):
+        return self.files[path]
+
+
+class FakeStorage:
+    def __init__(self, files):
+        self.files = files
+
+    def from_(self, _bucket_name):
+        return FakeStorageBucket(self.files)
+
+
+class FakeStorageSupabase(FakeSupabase):
+    def __init__(self, files):
+        super().__init__({})
+        self.storage = FakeStorage(files)
+
+
 class PaperUtilsCollectionTests(unittest.TestCase):
     def test_strip_metadata_columns_keeps_legacy_view_columns(self):
         columns = (
@@ -156,6 +180,30 @@ class PaperUtilsCollectionTests(unittest.TestCase):
 
         self.assertEqual([paper["title"] for paper in with_pdf], ["A"])
         self.assertEqual([paper["title"] for paper in without_attachment], ["B", "C", "D"])
+
+    def test_build_pdf_download_zip_downloads_only_attached_pdfs(self):
+        supabase = FakeStorageSupabase(
+            {
+                "user-id/a.pdf": b"%PDF-A",
+                "user-id/b.pdf": b"%PDF-B",
+            }
+        )
+        papers = [
+            {"id": "p1", "title": "Same Title", "pdf_path": "user-id/a.pdf"},
+            {"id": "p2", "title": "Same Title", "pdf_path": "user-id/b.pdf"},
+            {"id": "p3", "title": "No PDF", "pdf_path": ""},
+        ]
+
+        result = build_pdf_download_zip(supabase, papers)
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["failed"], [])
+        with zipfile.ZipFile(io.BytesIO(result["bytes"])) as archive:
+            names = archive.namelist()
+            self.assertEqual(len(names), 2)
+            self.assertEqual(archive.read(names[0]), b"%PDF-A")
+            self.assertEqual(archive.read(names[1]), b"%PDF-B")
+            self.assertNotEqual(names[0], names[1])
 
     def test_extract_pdf_summary_sections_finds_main_sections(self):
         sections = extract_pdf_summary_sections(

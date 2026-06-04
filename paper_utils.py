@@ -4,6 +4,7 @@ import os
 import re
 import unicodedata
 import uuid
+import zipfile
 
 from docx import Document
 
@@ -2515,6 +2516,83 @@ def create_pdf_signed_url(supabase, storage_path, expires_in=3600):
 def delete_pdf_from_storage(supabase, storage_path):
     if is_storage_path(storage_path):
         supabase.storage.from_(BUCKET_NAME).remove([storage_path])
+
+
+def download_pdf_from_storage(supabase, storage_path):
+    if not has_attachment_path(storage_path):
+        return None
+
+    response = supabase.storage.from_(BUCKET_NAME).download(storage_path)
+    if isinstance(response, bytes):
+        return response
+    if isinstance(response, bytearray):
+        return bytes(response)
+    if hasattr(response, "content"):
+        return response.content
+    if hasattr(response, "read"):
+        return response.read()
+    return bytes(response)
+
+
+def make_pdf_archive_filename(paper, index, used_names=None):
+    used_names = used_names if used_names is not None else set()
+    title = normalize_text_db_value((paper or {}).get("title")).strip()
+    fallback = normalize_text_db_value((paper or {}).get("id")).strip() or "paper"
+    base = title or fallback
+    base = unicodedata.normalize("NFKC", base)
+    base = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", base)
+    base = re.sub(r"\s+", " ", base).strip(" ._")
+    base = base[:120].strip(" ._") or "paper"
+
+    candidate = f"{index:03d}_{base}.pdf"
+    counter = 2
+    while candidate in used_names:
+        candidate = f"{index:03d}_{base}_{counter}.pdf"
+        counter += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def build_pdf_download_zip(supabase, papers):
+    buffer = io.BytesIO()
+    downloaded = []
+    failed = []
+    used_names = set()
+
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for index, paper in enumerate(papers or [], start=1):
+            storage_path = (paper or {}).get("pdf_path")
+            if not has_attachment_path(storage_path):
+                continue
+            try:
+                pdf_bytes = download_pdf_from_storage(supabase, storage_path)
+            except Exception as error:
+                failed.append(
+                    {
+                        "title": (paper or {}).get("title") or "Untitled",
+                        "error": str(error),
+                    }
+                )
+                continue
+            if not pdf_bytes:
+                failed.append(
+                    {
+                        "title": (paper or {}).get("title") or "Untitled",
+                        "error": "empty_pdf",
+                    }
+                )
+                continue
+
+            filename = make_pdf_archive_filename(paper, index, used_names)
+            archive.writestr(filename, pdf_bytes)
+            downloaded.append(filename)
+
+    return {
+        "bytes": buffer.getvalue(),
+        "count": len(downloaded),
+        "filenames": downloaded,
+        "failed": failed,
+    }
 
 
 def get_or_create_tag_id(supabase, user_id, tag_name):

@@ -48,6 +48,7 @@ from paper_utils import (
     READING_STATUSES,
     SORT_OPTIONS,
     build_document_citation_export_rows,
+    build_pdf_download_zip,
     create_collection,
     create_pdf_annotation,
     create_user_paper,
@@ -3037,8 +3038,8 @@ elif menu == "一覧":
             selected_bulk_records = [bulk_options[label] for label in selected_bulk_labels]
             st.caption(f"{len(selected_bulk_records)}件を選択中")
 
-            bulk_tab1, bulk_tab2, bulk_tab3, bulk_tab4 = st.tabs(
-                ["タグ", "コレクション", "ステータス", "エクスポート"]
+            bulk_tab1, bulk_tab2, bulk_tab3, bulk_tab_pdf, bulk_tab4 = st.tabs(
+                ["タグ", "コレクション", "ステータス", "PDF", "エクスポート"]
             )
             with bulk_tab1:
                 bulk_tags = st.text_input(
@@ -3122,6 +3123,107 @@ elif menu == "一覧":
                         clear_library_caches()
                         st.success(f"{len(selected_bulk_records)}件のステータスを変更しました。")
                         st.rerun()
+
+            with bulk_tab_pdf:
+                pdf_scope = st.radio(
+                    "対象",
+                    ["選択中", "現在の表示", "タグ"],
+                    horizontal=True,
+                    key="bulk_pdf_scope",
+                )
+                available_pdf_tags = sorted(
+                    {
+                        tag
+                        for record in records
+                        for tag in get_paper_tag_list(tag_map, record)
+                    },
+                    key=str.casefold,
+                )
+                selected_pdf_tag = None
+                if pdf_scope == "選択中":
+                    pdf_targets = selected_bulk_records
+                    pdf_suffix = "selected"
+                    if not selected_bulk_records:
+                        st.caption("文献を選択すると、その文献だけをPDF ZIPにできます。")
+                elif pdf_scope == "タグ":
+                    selected_pdf_tag = st.selectbox(
+                        "タグ",
+                        available_pdf_tags,
+                        key="bulk_pdf_tag",
+                        disabled=not available_pdf_tags,
+                    )
+                    pdf_targets = [
+                        record
+                        for record in records
+                        if selected_pdf_tag
+                        and selected_pdf_tag in get_paper_tag_list(tag_map, record)
+                    ]
+                    safe_tag = re.sub(r"[^A-Za-z0-9._-]+", "-", selected_pdf_tag or "tag").strip("-")
+                    pdf_suffix = f"tag-{safe_tag or 'tag'}"
+                else:
+                    pdf_targets = records
+                    pdf_suffix = "filtered"
+                    st.caption("現在の検索・絞り込み結果を対象にします。")
+
+                pdf_targets_with_file = [
+                    record
+                    for record in pdf_targets
+                    if has_attachment_path(record.get("pdf_path"))
+                ]
+                st.caption(
+                    f"対象 {len(pdf_targets)}件 / PDFあり {len(pdf_targets_with_file)}件"
+                )
+
+                pdf_signature = tuple(
+                    (str(record.get("id")), str(record.get("pdf_path")))
+                    for record in pdf_targets_with_file
+                )
+                prepare_col, download_col = st.columns([1, 1])
+                with prepare_col:
+                    if st.button(
+                        "PDF ZIPを準備",
+                        key="prepare_bulk_pdf_zip",
+                        disabled=not pdf_targets_with_file,
+                        use_container_width=True,
+                    ):
+                        with st.spinner("PDFをまとめています..."):
+                            try:
+                                pdf_zip_result = build_pdf_download_zip(
+                                    supabase,
+                                    pdf_targets_with_file,
+                                )
+                            except Exception:
+                                logger.exception("Failed to build bulk PDF ZIP")
+                                st.error("PDF ZIPの作成に失敗しました。ログを確認してください。")
+                            else:
+                                st.session_state["bulk_pdf_zip_result"] = pdf_zip_result
+                                st.session_state["bulk_pdf_zip_signature"] = pdf_signature
+                                st.session_state["bulk_pdf_zip_suffix"] = pdf_suffix
+                                if pdf_zip_result["count"]:
+                                    st.success(f"{pdf_zip_result['count']}件のPDFをまとめました。")
+                                else:
+                                    st.warning("ダウンロードできるPDFがありませんでした。")
+
+                prepared_zip = st.session_state.get("bulk_pdf_zip_result")
+                prepared_signature = st.session_state.get("bulk_pdf_zip_signature")
+                prepared_suffix = st.session_state.get("bulk_pdf_zip_suffix", "pdfs")
+                if prepared_zip and prepared_signature == pdf_signature:
+                    with download_col:
+                        st.download_button(
+                            "ZIPをダウンロード",
+                            data=prepared_zip["bytes"],
+                            file_name=f"bunken-pdfs-{prepared_suffix}.zip",
+                            mime="application/zip",
+                            key="download_bulk_pdf_zip",
+                            disabled=prepared_zip["count"] == 0,
+                            use_container_width=True,
+                        )
+                    if prepared_zip["failed"]:
+                        st.caption(
+                            f"{len(prepared_zip['failed'])}件はPDFを取得できませんでした。"
+                        )
+                elif st.session_state.get("bulk_pdf_zip_result"):
+                    st.caption("対象が変わりました。もう一度PDF ZIPを準備してください。")
 
             with bulk_tab4:
                 if selected_bulk_records:
