@@ -386,25 +386,6 @@ def make_status_pill(label, kind="normal"):
     return f"<span class='{class_name}'>{safe_label}</span>"
 
 
-def render_compact_paper_card(record, is_selected, marker_html):
-    title = html.escape(str(record.get("title") or "無題"))
-    authors = html.escape(str(record.get("authors") or "著者不明"))
-    journal = html.escape(str(record.get("journal") or "雑誌未設定"))
-    year = html.escape(str(record.get("year") or "-"))
-    status = html.escape(str(record.get("status") or "未設定"))
-    selected_class = " bunken-list-card-selected" if is_selected else ""
-    st.markdown(
-        f"""
-        <div class="bunken-list-card{selected_class}">
-          <div class="bunken-paper-title">{title}</div>
-          <div class="bunken-subtle">{authors} / {journal} / {year}</div>
-          <div>{make_status_pill(status, "warning" if status in ("未読", "引用予定") else "normal")}{marker_html}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def render_csl_style_selector(key, label="引用スタイル", default_style=None):
     style_labels = list(CSL_STYLE_OPTIONS.keys()) + ["CSL IDを指定"]
     normalized_default = (default_style or "").strip()
@@ -870,6 +851,19 @@ def set_list_filters(collection_label=None, tag_label=None, smart_filter=None):
         st.session_state["list_tag_filter"] = tag_label
     if smart_filter is not None:
         st.session_state["list_smart_filter"] = smart_filter
+
+
+def open_list_paper(record_id):
+    st.session_state["list_selected_paper_id"] = str(record_id)
+
+
+def toggle_bulk_selection(label):
+    selected_labels = list(st.session_state.get("list_bulk_selection", []))
+    if label in selected_labels:
+        selected_labels.remove(label)
+    else:
+        selected_labels.append(label)
+    st.session_state["list_bulk_selection"] = selected_labels
 
 
 def clean_optional_id(value):
@@ -3029,6 +3023,10 @@ elif menu == "一覧":
             f"[{record.get('ref_no')}] {record.get('title') or '無題'} ({record.get('year') or '-'})": record
             for record in records
         }
+        bulk_label_by_id = {
+            str(record["id"]): label
+            for label, record in bulk_options.items()
+        }
         with st.expander("一括操作"):
             selected_bulk_labels = st.multiselect(
                 "対象文献",
@@ -3582,6 +3580,7 @@ elif menu == "一覧":
 
             with pane_col2:
                 render_section_header("文献", f"{len(records)}件")
+                st.caption(f"一括操作で選択中: {len(selected_bulk_records)}件")
                 nav_col1, nav_col2, nav_col3 = st.columns([1, 1, 1])
                 with nav_col1:
                     if st.button(
@@ -3613,33 +3612,48 @@ elif menu == "一覧":
                     status = record.get("status") or "未設定"
                     missing_metadata_text = format_missing_publication_metadata(record)
 
-                    marker_html_parts = []
+                    plain_markers = []
                     if has_attachment_path(record.get("pdf_path")):
-                        marker_html_parts.append(make_status_pill("PDFあり", "accent"))
+                        plain_markers.append("PDFあり")
                     else:
-                        marker_html_parts.append(make_status_pill("PDFなし", "danger"))
+                        plain_markers.append("PDFなし")
                     if normalize_doi(record.get("doi")):
-                        marker_html_parts.append(make_status_pill("DOI", "accent"))
+                        plain_markers.append("DOIあり")
                     else:
-                        marker_html_parts.append(make_status_pill("DOIなし", "danger"))
+                        plain_markers.append("DOIなし")
                     if missing_metadata_text:
-                        marker_html_parts.append(make_status_pill("メタ不足", "warning"))
-                    render_compact_paper_card(
-                        record,
-                        is_selected,
-                        "".join(marker_html_parts),
+                        plain_markers.append("メタ不足")
+                    card_label = (
+                        f"{'表示中: ' if is_selected else ''}{record.get('title') or '無題'}\n\n"
+                        f"{record.get('authors') or '著者不明'} / "
+                        f"{record.get('journal') or '雑誌未設定'} / "
+                        f"{record.get('year') or '-'}\n\n"
+                        f"{status} / {' / '.join(plain_markers)}"
+                    )
+                    st.button(
+                        card_label,
+                        key=f"list_pane_open_card_{record_id}",
+                        use_container_width=True,
+                        on_click=open_list_paper,
+                        args=(record_id,),
+                    )
+                    bulk_label = bulk_label_by_id.get(record_id)
+                    bulk_selected = (
+                        bulk_label in st.session_state.get("list_bulk_selection", [])
+                        if bulk_label
+                        else False
                     )
                     select_col, status_col = st.columns([1, 2])
                     with select_col:
-                        button_label = "選択中" if is_selected else "選択"
-                        if st.button(
-                            button_label,
-                            key=f"list_pane_select_{record_id}",
-                            disabled=is_selected,
+                        select_label = "選択中" if bulk_selected else "選択"
+                        st.button(
+                            select_label,
+                            key=f"list_pane_bulk_select_{record_id}",
+                            disabled=not bulk_label,
                             use_container_width=True,
-                        ):
-                            st.session_state["list_selected_paper_id"] = record_id
-                            st.rerun()
+                            on_click=toggle_bulk_selection,
+                            args=(bulk_label,),
+                        )
                     with status_col:
                         if is_selected:
                             status_cols = st.columns(3)
