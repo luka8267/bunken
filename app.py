@@ -386,6 +386,25 @@ def make_status_pill(label, kind="normal"):
     return f"<span class='{class_name}'>{safe_label}</span>"
 
 
+def render_compact_paper_card(record, is_selected, marker_html):
+    title = html.escape(str(record.get("title") or "無題"))
+    authors = html.escape(str(record.get("authors") or "著者不明"))
+    journal = html.escape(str(record.get("journal") or "雑誌未設定"))
+    year = html.escape(str(record.get("year") or "-"))
+    status = html.escape(str(record.get("status") or "未設定"))
+    selected_class = " bunken-list-card-selected" if is_selected else ""
+    st.markdown(
+        f"""
+        <div class="bunken-list-card{selected_class}">
+          <div class="bunken-paper-title">{title}</div>
+          <div class="bunken-subtle">{authors} / {journal} / {year}</div>
+          <div>{make_status_pill(status, "warning" if status in ("未読", "引用予定") else "normal")}{marker_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_csl_style_selector(key, label="引用スタイル", default_style=None):
     style_labels = list(CSL_STYLE_OPTIONS.keys()) + ["CSL IDを指定"]
     normalized_default = (default_style or "").strip()
@@ -3612,30 +3631,21 @@ elif menu == "一覧":
                     status = record.get("status") or "未設定"
                     missing_metadata_text = format_missing_publication_metadata(record)
 
-                    plain_markers = []
+                    marker_html_parts = []
                     if has_attachment_path(record.get("pdf_path")):
-                        plain_markers.append("PDFあり")
+                        marker_html_parts.append(make_status_pill("PDFあり", "accent"))
                     else:
-                        plain_markers.append("PDFなし")
+                        marker_html_parts.append(make_status_pill("PDFなし", "danger"))
                     if normalize_doi(record.get("doi")):
-                        plain_markers.append("DOIあり")
+                        marker_html_parts.append(make_status_pill("DOI", "accent"))
                     else:
-                        plain_markers.append("DOIなし")
+                        marker_html_parts.append(make_status_pill("DOIなし", "danger"))
                     if missing_metadata_text:
-                        plain_markers.append("メタ不足")
-                    card_label = (
-                        f"{'表示中: ' if is_selected else ''}{record.get('title') or '無題'}\n\n"
-                        f"{record.get('authors') or '著者不明'} / "
-                        f"{record.get('journal') or '雑誌未設定'} / "
-                        f"{record.get('year') or '-'}\n\n"
-                        f"{status} / {' / '.join(plain_markers)}"
-                    )
-                    st.button(
-                        card_label,
-                        key=f"list_pane_open_card_{record_id}",
-                        use_container_width=True,
-                        on_click=open_list_paper,
-                        args=(record_id,),
+                        marker_html_parts.append(make_status_pill("メタ不足", "warning"))
+                    render_compact_paper_card(
+                        record,
+                        is_selected,
+                        "".join(marker_html_parts),
                     )
                     bulk_label = bulk_label_by_id.get(record_id)
                     bulk_selected = (
@@ -3643,7 +3653,7 @@ elif menu == "一覧":
                         if bulk_label
                         else False
                     )
-                    select_col, status_col = st.columns([1, 2])
+                    select_col, open_col, status_col = st.columns([1, 1, 2])
                     with select_col:
                         select_label = "選択中" if bulk_selected else "選択"
                         st.button(
@@ -3653,6 +3663,15 @@ elif menu == "一覧":
                             use_container_width=True,
                             on_click=toggle_bulk_selection,
                             args=(bulk_label,),
+                        )
+                    with open_col:
+                        st.button(
+                            "表示中" if is_selected else "表示",
+                            key=f"list_pane_open_card_{record_id}",
+                            disabled=is_selected,
+                            use_container_width=True,
+                            on_click=open_list_paper,
+                            args=(record_id,),
                         )
                     with status_col:
                         if is_selected:
