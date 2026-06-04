@@ -3008,7 +3008,6 @@ elif menu == "一覧":
             and clean_optional_id(record.get("item_id"))
             and has_missing_publication_metadata(record)
         ]
-        st.markdown("<div class='bunken-toolbar'>", unsafe_allow_html=True)
         tool_col1, tool_col2, tool_col3, tool_spacer = st.columns([1, 1, 1, 3])
         with tool_col1:
             with st.popover("エクスポート", use_container_width=True):
@@ -3459,7 +3458,6 @@ elif menu == "一覧":
                 st.write("候補検索を実行してください。")
             else:
                 st.write("DOIメタデータが不足している正規化文献はありません。")
-        st.markdown("</div>", unsafe_allow_html=True)
 
         if list_view_mode == "3ペイン":
             pane_col1, pane_col2, pane_col3 = st.columns([1.05, 1.75, 2.35])
