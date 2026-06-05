@@ -37,6 +37,33 @@ except ImportError:
     Image = None
     st_canvas = None
 
+try:
+    import streamlit_drawable_canvas as drawable_canvas
+    from streamlit.elements.lib import image_utils
+    from streamlit.elements.lib.layout_utils import LayoutConfig
+except ImportError:
+    drawable_canvas = None
+    image_utils = None
+    LayoutConfig = None
+
+if (
+    drawable_canvas is not None
+    and image_utils is not None
+    and LayoutConfig is not None
+    and not hasattr(drawable_canvas.st_image, "image_to_url")
+):
+    def _drawable_canvas_image_to_url(image, width, clamp, channels, output_format, image_id):
+        return image_utils.image_to_url(
+            image,
+            LayoutConfig(width=width),
+            clamp,
+            channels,
+            output_format,
+            image_id,
+        )
+
+    drawable_canvas.st_image.image_to_url = _drawable_canvas_image_to_url
+
 from auth_utils import (
     build_supabase_client,
     get_current_user_id,
