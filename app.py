@@ -1496,16 +1496,18 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     return page_count, safe_page_number, pixmap.tobytes("png")
 
 
-def extract_drag_rect(point, width, height):
-    if not point:
+def extract_two_click_rect(first_point, second_point, width, height):
+    if not first_point or not second_point:
         return None
-    if not all(key in point for key in ("x1", "y1", "x2", "y2")):
+    if not all(key in first_point for key in ("x", "y")):
+        return None
+    if not all(key in second_point for key in ("x", "y")):
         return None
     try:
-        x1 = float(point.get("x1"))
-        y1 = float(point.get("y1"))
-        x2 = float(point.get("x2"))
-        y2 = float(point.get("y2"))
+        x1 = float(first_point.get("x"))
+        y1 = float(first_point.get("y"))
+        x2 = float(second_point.get("x"))
+        y2 = float(second_point.get("y"))
     except (TypeError, ValueError):
         return None
     if width <= 0 or height <= 0:
@@ -1526,7 +1528,7 @@ def extract_drag_rect(point, width, height):
     }
 
 
-def render_annotation_preview_image(page_image, annotations):
+def render_annotation_preview_image(page_image, annotations, pending_rect=None):
     if ImageDraw is None:
         return page_image
     preview = page_image.convert("RGBA")
@@ -1545,6 +1547,20 @@ def render_annotation_preview_image(page_image, annotations):
         right = left + rect_width * preview.width
         bottom = top + rect_height * preview.height
         draw.rectangle((left, top, right, bottom), fill=(255, 246, 219, 95), outline=(183, 121, 31, 220), width=3)
+    if pending_rect:
+        try:
+            x = float(pending_rect.get("x"))
+            y = float(pending_rect.get("y"))
+            rect_width = float(pending_rect.get("width"))
+            rect_height = float(pending_rect.get("height"))
+        except (TypeError, ValueError):
+            pending_rect = None
+        if pending_rect:
+            left = x * preview.width
+            top = y * preview.height
+            right = left + rect_width * preview.width
+            bottom = top + rect_height * preview.height
+            draw.rectangle((left, top, right, bottom), fill=(230, 244, 241, 90), outline=(25, 118, 109, 230), width=4)
     return Image.alpha_composite(preview, overlay).convert("RGB")
 
 
@@ -1568,35 +1584,62 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
     )
     type_labels = {value: key for key, value in PDF_ANNOTATION_TYPES.items()}
     form_key = f"{key_prefix}_pdf_annotation_form_{paper_id}_{page_number}"
-    selected_rect = None
+    rect_key = f"{key_prefix}_annotation_rect_{paper_id}_{page_number}"
+    corner_key = f"{key_prefix}_annotation_first_corner_{paper_id}_{page_number}"
+    event_key = f"{key_prefix}_annotation_last_event_{paper_id}_{page_number}"
+    selected_rect = st.session_state.get(rect_key)
     if page_image_bytes and streamlit_image_coordinates and Image:
         try:
             page_image = Image.open(io.BytesIO(page_image_bytes))
         except Exception:
             page_image = None
         if page_image:
-            st.caption("下のPDF画像で範囲をドラッグすると、その位置をハイライト注釈として保存できます。")
-            preview_image = render_annotation_preview_image(page_image, current_page_annotations)
-            drag_point = streamlit_image_coordinates(
+            st.caption("下のPDF画像で、範囲の左上と右下を順番にクリックすると、その位置をハイライト注釈として保存できます。")
+            preview_image = render_annotation_preview_image(
+                page_image,
+                current_page_annotations,
+                selected_rect,
+            )
+            clicked_point = streamlit_image_coordinates(
                 preview_image,
                 width=page_image.width,
-                click_and_drag=True,
+                click_and_drag=False,
                 cursor="crosshair",
                 key=f"{key_prefix}_annotation_image_{paper_id}_{page_number}",
             )
-            selected_rect = extract_drag_rect(
-                drag_point,
-                page_image.width,
-                page_image.height,
-            )
+            if clicked_point and clicked_point.get("unix_time") != st.session_state.get(event_key):
+                st.session_state[event_key] = clicked_point.get("unix_time")
+                current_point = {"x": clicked_point.get("x"), "y": clicked_point.get("y")}
+                first_point = st.session_state.get(corner_key)
+                if first_point:
+                    selected_rect = extract_two_click_rect(
+                        first_point,
+                        current_point,
+                        page_image.width,
+                        page_image.height,
+                    )
+                    if selected_rect:
+                        st.session_state[rect_key] = selected_rect
+                    st.session_state.pop(corner_key, None)
+                else:
+                    st.session_state[corner_key] = current_point
+                    st.session_state.pop(rect_key, None)
+                st.rerun()
+            if st.session_state.get(corner_key):
+                point = st.session_state[corner_key]
+                st.caption(f"1点目を選択中: x={point.get('x')}, y={point.get('y')}。右下をクリックしてください。")
             if selected_rect:
                 st.caption(
                     "選択範囲: "
                     f"x={selected_rect['x']:.3f}, y={selected_rect['y']:.3f}, "
                     f"w={selected_rect['width']:.3f}, h={selected_rect['height']:.3f}"
                 )
+                if st.button("選択範囲をクリア", key=f"{key_prefix}_clear_annotation_rect_{paper_id}_{page_number}"):
+                    st.session_state.pop(rect_key, None)
+                    st.session_state.pop(corner_key, None)
+                    st.rerun()
     elif page_image_bytes:
-        st.caption("PDF上の範囲選択には streamlit-drawable-canvas が必要です。未導入環境では通常の注釈として保存します。")
+        st.caption("PDF上の範囲選択には streamlit-image-coordinates が必要です。未導入環境では通常の注釈として保存します。")
     with st.form(form_key):
         annotation_type_label = st.selectbox(
             "種類",
@@ -1642,6 +1685,8 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                         color,
                         rect=selected_rect,
                     )
+                    st.session_state.pop(rect_key, None)
+                    st.session_state.pop(corner_key, None)
                     st.success("PDF注釈を追加しました。")
                     st.rerun()
                 except Exception:
