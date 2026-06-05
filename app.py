@@ -31,28 +31,15 @@ except ImportError:
     fitz = None
 
 try:
-    from PIL import Image
-    from streamlit_drawable_canvas import st_canvas
+    from PIL import Image, ImageDraw
 except ImportError:
     Image = None
-    st_canvas = None
+    ImageDraw = None
 
 try:
-    import streamlit_drawable_canvas as drawable_canvas
+    from streamlit_image_coordinates import streamlit_image_coordinates
 except ImportError:
-    drawable_canvas = None
-
-if (
-    drawable_canvas is not None
-    and not hasattr(drawable_canvas.st_image, "image_to_url")
-):
-    def _drawable_canvas_image_to_url(image, width, clamp, channels, output_format, image_id):
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return f"data:image/png;base64,{encoded}"
-
-    drawable_canvas.st_image.image_to_url = _drawable_canvas_image_to_url
+    streamlit_image_coordinates = None
 
 from auth_utils import (
     build_supabase_client,
@@ -1509,34 +1496,27 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     return page_count, safe_page_number, pixmap.tobytes("png")
 
 
-def extract_canvas_rect(canvas_result, width, height):
-    if not canvas_result or not getattr(canvas_result, "json_data", None):
+def extract_drag_rect(point, width, height):
+    if not point:
         return None
-    objects = canvas_result.json_data.get("objects") or []
-    rect_objects = [
-        item
-        for item in objects
-        if isinstance(item, dict)
-        and item.get("type") == "rect"
-        and item.get("name") != "saved_annotation"
-    ]
-    if not rect_objects:
+    if not all(key in point for key in ("x1", "y1", "x2", "y2")):
         return None
-    rect = rect_objects[-1]
     try:
-        left = float(rect.get("left") or 0)
-        top = float(rect.get("top") or 0)
-        rect_width = float(rect.get("width") or 0) * float(rect.get("scaleX") or 1)
-        rect_height = float(rect.get("height") or 0) * float(rect.get("scaleY") or 1)
+        x1 = float(point.get("x1"))
+        y1 = float(point.get("y1"))
+        x2 = float(point.get("x2"))
+        y2 = float(point.get("y2"))
     except (TypeError, ValueError):
         return None
-    if width <= 0 or height <= 0 or rect_width <= 0 or rect_height <= 0:
+    if width <= 0 or height <= 0:
         return None
-    left = max(0, min(left, width))
-    top = max(0, min(top, height))
-    rect_width = max(0, min(rect_width, width - left))
-    rect_height = max(0, min(rect_height, height - top))
-    if rect_width <= 0 or rect_height <= 0:
+    left = max(0, min(x1, x2, width))
+    top = max(0, min(y1, y2, height))
+    right = max(0, min(max(x1, x2), width))
+    bottom = max(0, min(max(y1, y2), height))
+    rect_width = right - left
+    rect_height = bottom - top
+    if rect_width < 4 or rect_height < 4:
         return None
     return {
         "x": left / width,
@@ -1546,8 +1526,12 @@ def extract_canvas_rect(canvas_result, width, height):
     }
 
 
-def build_annotation_rect_drawing(annotations, width, height):
-    objects = []
+def render_annotation_preview_image(page_image, annotations):
+    if ImageDraw is None:
+        return page_image
+    preview = page_image.convert("RGBA")
+    overlay = Image.new("RGBA", preview.size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(overlay)
     for annotation in annotations or []:
         try:
             x = float(annotation.get("rect_x"))
@@ -1556,28 +1540,12 @@ def build_annotation_rect_drawing(annotations, width, height):
             rect_height = float(annotation.get("rect_height"))
         except (TypeError, ValueError):
             continue
-        color = annotation.get("color") or "#fff6db"
-        objects.append(
-            {
-                "type": "rect",
-                "name": "saved_annotation",
-                "version": "4.4.0",
-                "originX": "left",
-                "originY": "top",
-                "left": x * width,
-                "top": y * height,
-                "width": rect_width * width,
-                "height": rect_height * height,
-                "fill": f"{color}66",
-                "stroke": color,
-                "strokeWidth": 2,
-                "scaleX": 1,
-                "scaleY": 1,
-                "angle": 0,
-                "selectable": False,
-            }
-        )
-    return {"version": "4.4.0", "objects": objects}
+        left = x * preview.width
+        top = y * preview.height
+        right = left + rect_width * preview.width
+        bottom = top + rect_height * preview.height
+        draw.rectangle((left, top, right, bottom), fill=(255, 246, 219, 95), outline=(183, 121, 31, 220), width=3)
+    return Image.alpha_composite(preview, overlay).convert("RGB")
 
 
 def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper", page_state_key=None, page_image_bytes=None):
@@ -1601,31 +1569,23 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
     type_labels = {value: key for key, value in PDF_ANNOTATION_TYPES.items()}
     form_key = f"{key_prefix}_pdf_annotation_form_{paper_id}_{page_number}"
     selected_rect = None
-    if page_image_bytes and st_canvas and Image:
+    if page_image_bytes and streamlit_image_coordinates and Image:
         try:
             page_image = Image.open(io.BytesIO(page_image_bytes))
         except Exception:
             page_image = None
         if page_image:
-            st.caption("PDF上で範囲をドラッグすると、その位置をハイライト注釈として保存できます。")
-            canvas_result = st_canvas(
-                fill_color="rgba(255, 246, 219, 0.35)",
-                stroke_width=2,
-                stroke_color="#b7791f",
-                background_image=page_image,
-                initial_drawing=build_annotation_rect_drawing(
-                    current_page_annotations,
-                    page_image.width,
-                    page_image.height,
-                ),
-                update_streamlit=True,
-                height=page_image.height,
+            st.caption("下のPDF画像で範囲をドラッグすると、その位置をハイライト注釈として保存できます。")
+            preview_image = render_annotation_preview_image(page_image, current_page_annotations)
+            drag_point = streamlit_image_coordinates(
+                preview_image,
                 width=page_image.width,
-                drawing_mode="rect",
-                key=f"{key_prefix}_annotation_canvas_{paper_id}_{page_number}",
+                click_and_drag=True,
+                cursor="crosshair",
+                key=f"{key_prefix}_annotation_image_{paper_id}_{page_number}",
             )
-            selected_rect = extract_canvas_rect(
-                canvas_result,
+            selected_rect = extract_drag_rect(
+                drag_point,
                 page_image.width,
                 page_image.height,
             )
