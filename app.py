@@ -81,6 +81,7 @@ from paper_utils import (
     find_duplicate_paper_groups,
     get_document_citation_usage_map,
     get_next_display_order,
+    list_available_csl_styles,
     get_tag_map_for_papers,
     make_bibtex_entry,
     make_ris_entry,
@@ -406,7 +407,7 @@ def render_compact_paper_card(record, is_selected, marker_html):
 
 
 def render_csl_style_selector(key, label="引用スタイル", default_style=None):
-    style_labels = list(CSL_STYLE_OPTIONS.keys()) + ["CSL IDを指定"]
+    style_labels = list(CSL_STYLE_OPTIONS.keys()) + ["CSL IDを指定", "CSLスタイルを検索"]
     normalized_default = (default_style or "").strip()
     default_label = next(
         (
@@ -422,6 +423,23 @@ def render_csl_style_selector(key, label="引用スタイル", default_style=Non
         index=style_labels.index(default_label),
         key=f"{key}_label",
     )
+    if selected_label == "CSLスタイルを検索":
+        search_query = st.text_input(
+            "CSLスタイル検索",
+            value=st.session_state.get(f"{key}_search", ""),
+            placeholder="例: nature, american-chemical-society, angewandte",
+            key=f"{key}_search",
+        )
+        style_options = list_available_csl_styles(search_query)
+        if not style_options:
+            st.caption("一致するCSLスタイルが見つかりません。CSL IDを直接指定してください。")
+            return "CSL IDを指定", normalized_default or "apa"
+        selected_style = st.selectbox(
+            "候補",
+            style_options,
+            key=f"{key}_search_result",
+        )
+        return selected_style, selected_style
     if selected_label == "CSL IDを指定":
         custom_style = st.text_input(
             "CSLスタイルID",
@@ -1467,7 +1485,7 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     return page_count, safe_page_number, pixmap.tobytes("png")
 
 
-def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"):
+def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper", page_state_key=None):
     paper_id = str(paper.get("id"))
     try:
         annotations = fetch_pdf_annotations(supabase, user_id, paper_id)
@@ -1598,7 +1616,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                         }.get,
                         key=f"{key_prefix}_annotation_color_{annotation_id}",
                     )
-                    action_col1, action_col2, action_col3 = st.columns(3)
+                    action_col1, action_col2, action_col3, action_col4 = st.columns(4)
                     with action_col1:
                         if st.button(
                             "注釈を保存",
@@ -1640,6 +1658,15 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                             annotation,
                             f"{key_prefix}_{annotation_id}",
                         )
+                    with action_col4:
+                        if st.button(
+                            "ページへ",
+                            key=f"{key_prefix}_annotation_jump_{annotation_id}",
+                            disabled=not page_state_key,
+                            use_container_width=True,
+                        ):
+                            st.session_state[page_state_key] = int(annotation.get("page_number") or 1)
+                            st.rerun()
 
 
 def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
@@ -1737,6 +1764,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                         user_id,
                         rendered_page,
                         key_prefix=key_prefix,
+                        page_state_key=page_key,
                     )
                     annotations_rendered = True
     if user_id and not annotations_rendered:
@@ -1745,6 +1773,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
             user_id,
             st.session_state[page_key],
             key_prefix=key_prefix,
+            page_state_key=page_key,
         )
 
 

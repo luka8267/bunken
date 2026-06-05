@@ -1971,6 +1971,34 @@ def get_csl_style_path(style):
     return style_path if os.path.exists(style_path) else None
 
 
+def list_available_csl_styles(query="", limit=80):
+    styles = []
+    if citeproc_styles is None:
+        return styles
+
+    styles_dir = os.path.join(os.path.dirname(citeproc_styles.__file__), "styles")
+    if not os.path.isdir(styles_dir):
+        return styles
+
+    normalized_query = str(query or "").strip().lower()
+    try:
+        names = os.listdir(styles_dir)
+    except OSError:
+        return styles
+
+    for name in names:
+        if not name.endswith(".csl"):
+            continue
+        style_id = name[:-4]
+        if normalized_query and normalized_query not in style_id.lower():
+            continue
+        styles.append(style_id)
+
+    preferred = list(CSL_STYLE_OPTIONS.values())
+    styles = sorted(set(styles), key=lambda value: (value not in preferred, value))
+    return styles[: max(int(limit or 80), 1)]
+
+
 def parse_csl_authors(authors):
     csl_authors = []
     for name in normalize_bibtex_authors(authors):

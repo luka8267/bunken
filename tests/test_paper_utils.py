@@ -23,6 +23,7 @@ from paper_utils import (
     get_document_citation_usage_map,
     get_tag_map_for_papers,
     has_attachment_path,
+    list_available_csl_styles,
     make_bibtex_entry,
     make_ris_entry,
     make_word_citation,
@@ -246,6 +247,12 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         self.assertEqual(csl_item["DOI"], "10.1000/example")
         self.assertEqual(csl_item["issued"]["date-parts"], [[2026]])
         self.assertEqual(csl_item["author"][0], {"family": "Smith", "given": "Jane"})
+
+    def test_list_available_csl_styles_can_find_common_styles(self):
+        styles = list_available_csl_styles("nature", limit=20)
+
+        self.assertIn("nature", styles)
+        self.assertLessEqual(len(styles), 20)
 
     def test_normalize_doi_accepts_url_and_prefix_forms(self):
         self.assertEqual(
