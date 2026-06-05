@@ -44,6 +44,9 @@ Use `PDF読書` for a reading-focused workflow.
 
 - Select a PDF-backed paper.
 - Adjust page, zoom, and viewer height.
+- Draw a rectangle on the rendered PDF page to save a position-linked
+  highlight annotation.
+- Use `ページへ` from an annotation to jump back to its PDF page.
 - Save basic notes, PDF reading notes, and citation-planning notes.
 - Quickly mark papers as 読書中, 読了, or 引用予定.
 
@@ -87,8 +90,12 @@ In Word:
 3. Search by title, author, journal, DOI, year, tag, or collection.
 4. Select a paper.
 5. Insert a citation.
-6. Update the reference list.
-7. Use the document citation panel to check synced citations.
+6. For page numbers or locators, select an existing citation, load it for
+   editing, enter a locator such as `p. 25`, and save it.
+7. For multiple citations, load an existing citation, select another paper, and
+   add it to that citation.
+8. Update the reference list.
+9. Use the document citation panel to check synced citations.
 
 In the web app, open `文書引用` to see which Word documents use each paper and
 the text around each citation.
@@ -100,6 +107,7 @@ From `一覧`, `コレクション`, or a selected paper:
 - export Word references
 - export BibTeX
 - export RIS
+- export selected, filtered, or tag-based PDF ZIP files
 - export citation usage CSV from `文書引用`
 
 ## Troubleshooting

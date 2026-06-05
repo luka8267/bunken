@@ -27,6 +27,7 @@ from paper_utils import (
     make_bibtex_entry,
     make_ris_entry,
     make_word_citation,
+    normalize_annotation_rect,
     normalize_doi,
     normalize_author_list,
     normalize_journal_title,
@@ -167,6 +168,23 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         self.assertFalse(has_attachment_path("nan"))
         self.assertFalse(has_attachment_path("null"))
         self.assertTrue(has_attachment_path("user-id/paper.pdf"))
+
+    def test_normalize_annotation_rect_accepts_normalized_rectangle(self):
+        self.assertEqual(
+            normalize_annotation_rect(
+                {"x": "0.1", "y": 0.2, "width": 0.3, "height": 0.4}
+            ),
+            {
+                "rect_x": 0.1,
+                "rect_y": 0.2,
+                "rect_width": 0.3,
+                "rect_height": 0.4,
+            },
+        )
+        self.assertEqual(
+            normalize_annotation_rect({"x": 0.9, "y": 0.2, "width": 0.3, "height": 0.4}),
+            {},
+        )
 
     def test_filter_papers_uses_normalized_attachment_presence(self):
         papers = [

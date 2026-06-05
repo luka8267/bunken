@@ -30,6 +30,13 @@ try:
 except ImportError:
     fitz = None
 
+try:
+    from PIL import Image
+    from streamlit_drawable_canvas import st_canvas
+except ImportError:
+    Image = None
+    st_canvas = None
+
 from auth_utils import (
     build_supabase_client,
     get_current_user_id,
@@ -1485,7 +1492,78 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     return page_count, safe_page_number, pixmap.tobytes("png")
 
 
-def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper", page_state_key=None):
+def extract_canvas_rect(canvas_result, width, height):
+    if not canvas_result or not getattr(canvas_result, "json_data", None):
+        return None
+    objects = canvas_result.json_data.get("objects") or []
+    rect_objects = [
+        item
+        for item in objects
+        if isinstance(item, dict)
+        and item.get("type") == "rect"
+        and item.get("name") != "saved_annotation"
+    ]
+    if not rect_objects:
+        return None
+    rect = rect_objects[-1]
+    try:
+        left = float(rect.get("left") or 0)
+        top = float(rect.get("top") or 0)
+        rect_width = float(rect.get("width") or 0) * float(rect.get("scaleX") or 1)
+        rect_height = float(rect.get("height") or 0) * float(rect.get("scaleY") or 1)
+    except (TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0 or rect_width <= 0 or rect_height <= 0:
+        return None
+    left = max(0, min(left, width))
+    top = max(0, min(top, height))
+    rect_width = max(0, min(rect_width, width - left))
+    rect_height = max(0, min(rect_height, height - top))
+    if rect_width <= 0 or rect_height <= 0:
+        return None
+    return {
+        "x": left / width,
+        "y": top / height,
+        "width": rect_width / width,
+        "height": rect_height / height,
+    }
+
+
+def build_annotation_rect_drawing(annotations, width, height):
+    objects = []
+    for annotation in annotations or []:
+        try:
+            x = float(annotation.get("rect_x"))
+            y = float(annotation.get("rect_y"))
+            rect_width = float(annotation.get("rect_width"))
+            rect_height = float(annotation.get("rect_height"))
+        except (TypeError, ValueError):
+            continue
+        color = annotation.get("color") or "#fff6db"
+        objects.append(
+            {
+                "type": "rect",
+                "name": "saved_annotation",
+                "version": "4.4.0",
+                "originX": "left",
+                "originY": "top",
+                "left": x * width,
+                "top": y * height,
+                "width": rect_width * width,
+                "height": rect_height * height,
+                "fill": f"{color}66",
+                "stroke": color,
+                "strokeWidth": 2,
+                "scaleX": 1,
+                "scaleY": 1,
+                "angle": 0,
+                "selectable": False,
+            }
+        )
+    return {"version": "4.4.0", "objects": objects}
+
+
+def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper", page_state_key=None, page_image_bytes=None):
     paper_id = str(paper.get("id"))
     try:
         annotations = fetch_pdf_annotations(supabase, user_id, paper_id)
@@ -1505,11 +1583,48 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
     )
     type_labels = {value: key for key, value in PDF_ANNOTATION_TYPES.items()}
     form_key = f"{key_prefix}_pdf_annotation_form_{paper_id}_{page_number}"
+    selected_rect = None
+    if page_image_bytes and st_canvas and Image:
+        try:
+            page_image = Image.open(io.BytesIO(page_image_bytes))
+        except Exception:
+            page_image = None
+        if page_image:
+            st.caption("PDF上で範囲をドラッグすると、その位置をハイライト注釈として保存できます。")
+            canvas_result = st_canvas(
+                fill_color="rgba(255, 246, 219, 0.35)",
+                stroke_width=2,
+                stroke_color="#b7791f",
+                background_image=page_image,
+                initial_drawing=build_annotation_rect_drawing(
+                    current_page_annotations,
+                    page_image.width,
+                    page_image.height,
+                ),
+                update_streamlit=True,
+                height=page_image.height,
+                width=page_image.width,
+                drawing_mode="rect",
+                key=f"{key_prefix}_annotation_canvas_{paper_id}_{page_number}",
+            )
+            selected_rect = extract_canvas_rect(
+                canvas_result,
+                page_image.width,
+                page_image.height,
+            )
+            if selected_rect:
+                st.caption(
+                    "選択範囲: "
+                    f"x={selected_rect['x']:.3f}, y={selected_rect['y']:.3f}, "
+                    f"w={selected_rect['width']:.3f}, h={selected_rect['height']:.3f}"
+                )
+    elif page_image_bytes:
+        st.caption("PDF上の範囲選択には streamlit-drawable-canvas が必要です。未導入環境では通常の注釈として保存します。")
     with st.form(form_key):
         annotation_type_label = st.selectbox(
             "種類",
             list(type_labels.keys()),
-            index=1,
+            index=0 if selected_rect else 1,
             key=f"{form_key}_type",
         )
         selected_text = st.text_area(
@@ -1548,6 +1663,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                         selected_text,
                         note,
                         color,
+                        rect=selected_rect,
                     )
                     st.success("PDF注釈を追加しました。")
                     st.rerun()
@@ -1765,6 +1881,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                         rendered_page,
                         key_prefix=key_prefix,
                         page_state_key=page_key,
+                        page_image_bytes=png_bytes,
                     )
                     annotations_rendered = True
     if user_id and not annotations_rendered:

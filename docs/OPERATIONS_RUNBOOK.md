@@ -174,4 +174,25 @@ Smoke-test:
 - DOI/metadata buttons open without errors
 - import preview opens without accidental import
 - PDF読書 opens for a PDF-backed paper
+- PDF rectangle annotation can be created and revisited with `ページへ`
 - Word add-in login, search, citation insert, reference update
+
+Chrome extension:
+
+```powershell
+cd "C:\Users\run_r\OneDrive\ドキュメント\word_addin\word_addin"
+node tests\test_chrome_extension.js
+node scripts\verify-chrome-extension-real-pages.js
+```
+
+Publisher pages can block server-side verification. Treat ACS/ScienceDirect 403
+as a site-access limitation, then verify in the browser extension itself.
+
+Supabase advisors:
+
+```powershell
+supabase db advisors --linked
+```
+
+The currently known remaining warning is `auth_leaked_password_protection`.
+Enable it from Supabase Auth settings before public release if possible.

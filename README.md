@@ -9,6 +9,18 @@
 - [Deployment](docs/DEPLOYMENT.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 
+## Current feature highlights
+
+- Zotero-style 3-pane literature management with collections, tags, smart
+  filters, bulk actions, and PDF ZIP export.
+- PDF reading workflow with page rendering, reading notes, citation-planning
+  notes, and position-linked rectangle annotations.
+- DOI, BibTeX, RIS, PDF, and Chrome extension imports with duplicate checks.
+- CSL citation formatting with searchable installed styles.
+- Word add-in integration for paper search, citation insertion, locator/page
+  edits, multiple-citation editing, bibliography regeneration, and document
+  citation sync.
+
 ## Local development
 
 Create `.streamlit/secrets.toml`:

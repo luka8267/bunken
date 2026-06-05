@@ -23,6 +23,7 @@ For this app, back up at least these tables before DB changes:
 - `collection_items`
 - `documents`
 - `document_citations`
+- `pdf_annotations`
 
 If a change touches storage paths, also record the affected Storage bucket paths
 from `papers.pdf_path`, `papers.supporting_path`, and `attachments.storage_path`.
@@ -118,6 +119,17 @@ For malformed item tag references:
 select item_id, tag_id
 from public.item_tags
 where tag_id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+```
+
+For PDF annotation rectangle migrations:
+
+```sql
+select column_name, data_type
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'pdf_annotations'
+  and column_name like 'rect_%'
+order by ordinal_position;
 ```
 
 ## Restore policy

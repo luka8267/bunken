@@ -1604,6 +1604,35 @@ def fetch_pdf_annotations(supabase, user_id, paper_id):
         raise
 
 
+def normalize_annotation_rect(rect):
+    if not isinstance(rect, dict):
+        return {}
+
+    normalized = {}
+    for source_key, target_key in (
+        ("x", "rect_x"),
+        ("y", "rect_y"),
+        ("width", "rect_width"),
+        ("height", "rect_height"),
+    ):
+        try:
+            value = float(rect.get(source_key))
+        except (TypeError, ValueError):
+            return {}
+        normalized[target_key] = value
+
+    if (
+        normalized["rect_x"] < 0
+        or normalized["rect_y"] < 0
+        or normalized["rect_width"] <= 0
+        or normalized["rect_height"] <= 0
+        or normalized["rect_x"] + normalized["rect_width"] > 1
+        or normalized["rect_y"] + normalized["rect_height"] > 1
+    ):
+        return {}
+    return normalized
+
+
 def create_pdf_annotation(
     supabase,
     user_id,
@@ -1613,6 +1642,7 @@ def create_pdf_annotation(
     selected_text="",
     note="",
     color="#fff6db",
+    rect=None,
 ):
     annotation_type = annotation_type if annotation_type in PDF_ANNOTATION_TYPES else "page_note"
     payload = {
@@ -1624,6 +1654,7 @@ def create_pdf_annotation(
         "note": normalize_text_db_value(note),
         "color": color or "#fff6db",
     }
+    payload.update(normalize_annotation_rect(rect))
     return supabase.table("pdf_annotations").insert(payload).execute()
 
 
@@ -1635,6 +1666,7 @@ def update_pdf_annotation(
     selected_text="",
     note="",
     color="#fff6db",
+    rect=None,
 ):
     annotation_type = annotation_type if annotation_type in PDF_ANNOTATION_TYPES else "page_note"
     payload = {
@@ -1643,6 +1675,9 @@ def update_pdf_annotation(
         "note": normalize_text_db_value(note),
         "color": color or "#fff6db",
     }
+    rect_fields = normalize_annotation_rect(rect)
+    if rect_fields:
+        payload.update(rect_fields)
     return (
         supabase.table("pdf_annotations")
         .update(payload)

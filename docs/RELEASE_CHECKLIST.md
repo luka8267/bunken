@@ -41,6 +41,7 @@ Manual smoke test:
 - add/search/list a paper
 - open 3-pane list
 - open PDF reading page
+- create a PDF annotation rectangle and jump back to it with `ページへ`
 - run import preview without importing
 - open duplicate history
 - open document citation view
@@ -77,6 +78,7 @@ From `C:\Users\run_r\OneDrive\ドキュメント\word_addin\word_addin`:
 ```powershell
 node --check chrome_extension\popup.js
 node tests\test_chrome_extension.js
+node scripts\verify-chrome-extension-real-pages.js
 python -m unittest discover -s tests -v
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Verify-ExtensionRelease.ps1
 ```
@@ -92,6 +94,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Verify-ExtensionRe
 Pass criteria:
 
 - GitHub raw manifest and generated ZIP report the same extension version.
+- Real-page metadata verification passes or reports only publisher blocking for
+  ACS, ScienceDirect, or Google Scholar.
 - Unauthenticated `/api/addin/extension/save` returns `401` with CORS headers.
 - First authenticated save returns an `itemId`.
 - Saving the same DOI again returns `duplicate: true`.
