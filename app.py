@@ -633,7 +633,7 @@ def show_password_reset_request_form():
             st.success("再設定メールを送信しました。メール内のリンクから新しいパスワードを設定してください。")
         except Exception as error:
             logger.exception("Failed to request password reset")
-            st.error(f"再設定メールの送信に失敗しました: {error}")
+            st.error("再設定メールを送信できませんでした。メールアドレスを確認して、もう一度お試しください。")
 
 
 def show_password_update_form():
@@ -652,7 +652,7 @@ def show_password_update_form():
             st.session_state["password_reset_verified"] = True
         except Exception as error:
             logger.exception("Failed to verify password reset token")
-            st.error(f"再設定リンクを確認できませんでした: {error}")
+            st.error("再設定リンクを確認できませんでした。もう一度パスワード再設定を行ってください。")
             return
 
     if access_token and refresh_token and not st.session_state.get("password_reset_verified"):
@@ -663,7 +663,7 @@ def show_password_update_form():
             st.session_state["password_reset_verified"] = True
         except Exception as error:
             logger.exception("Failed to restore password reset session")
-            st.error(f"再設定セッションを確認できませんでした: {error}")
+            st.error("再設定リンクの有効期限が切れています。もう一度パスワード再設定を行ってください。")
             return
 
     with st.form("password_update_form"):
@@ -687,7 +687,7 @@ def show_password_update_form():
             st.success("パスワードを更新しました。新しいパスワードでログインしてください。")
         except Exception as error:
             logger.exception("Failed to update password")
-            st.error(f"パスワード更新に失敗しました: {error}")
+            st.error("パスワードを更新できませんでした。時間をおいてもう一度お試しください。")
 
 
 class MetadataParser(HTMLParser):
@@ -1029,7 +1029,7 @@ def build_annotation_citation_note(annotation):
 def append_annotation_to_citation_note(paper, user_id, annotation):
     annotation_note = build_annotation_citation_note(annotation)
     if not annotation_note.strip():
-        raise ValueError("引用予定メモへ反映できる注釈本文がありません。")
+        raise ValueError("引用予定メモに追加できる注釈本文がありません。")
 
     row_dict = dict(paper)
     notes_parts = split_structured_notes(row_dict.get("notes"))
@@ -1068,17 +1068,17 @@ def append_annotation_to_citation_note(paper, user_id, annotation):
 
 def render_annotation_to_citation_button(paper, user_id, annotation, key_prefix):
     if st.button(
-        "引用予定メモへ反映",
+        "引用予定メモに追加",
         key=f"{key_prefix}_annotation_to_citation_{annotation['id']}",
         use_container_width=True,
     ):
         try:
             append_annotation_to_citation_note(paper, user_id, annotation)
-            st.success("注釈を引用予定メモへ反映しました。")
+            st.success("注釈を引用予定メモに追加しました。")
             st.rerun()
         except Exception as error:
             logger.exception("Failed to append annotation to citation note")
-            st.error(f"引用予定メモへの反映に失敗しました: {error}")
+            st.error("引用予定メモに追加できませんでした。時間をおいてもう一度お試しください。")
 
 
 def render_pdf_annotation_summary(paper, user_id, key_prefix="paper", page_state_key=None):
@@ -1335,7 +1335,7 @@ def render_paper_edit_form(
         key=f"{key_prefix}_supporting_upload_{row_dict['id']}",
     )
 
-    if st.button("💾 保存", key=f"{key_prefix}_save_{row_dict['id']}"):
+    if st.button("変更を保存", key=f"{key_prefix}_save_{row_dict['id']}"):
         try:
             new_pdf_path = (
                 upload_pdf_to_storage(supabase, new_pdf_file, user_id)
@@ -1407,11 +1407,11 @@ def render_paper_edit_form(
             ):
                 delete_pdf_from_storage(supabase, supporting_path)
             clear_library_caches()
-            st.success("更新しました")
+            st.success("保存しました。")
             st.rerun()
         except Exception:
             logger.exception("Failed to update paper")
-            st.error("更新に失敗しました。入力内容とログを確認してください。")
+            st.error("保存できませんでした。入力内容を確認して、もう一度お試しください。")
 
 
 def render_paper_delete_control(paper, user_id, key_prefix="paper"):
@@ -1420,15 +1420,15 @@ def render_paper_delete_control(paper, user_id, key_prefix="paper"):
     if not paper_id:
         return
 
-    with st.expander("文献を削除"):
-        st.warning("この操作は文献、タグ/コレクション関連付け、添付ファイルを削除します。")
+    with st.expander("危険な操作: 文献削除"):
+        st.warning("この操作は文献、タグ、コレクション所属、添付ファイルを削除します。")
         st.caption("削除する場合は「削除」と入力してください。Word引用で使われている文献は削除できません。")
         confirm = st.text_input(
             "確認",
             key=f"{key_prefix}_delete_confirm_{paper_id}",
         )
         if st.button(
-            "この文献を削除",
+            "確認して削除",
             key=f"{key_prefix}_delete_button_{paper_id}",
             disabled=confirm != "削除",
             use_container_width=True,
@@ -1446,9 +1446,12 @@ def render_paper_delete_control(paper, user_id, key_prefix="paper"):
                 clear_library_caches()
                 st.session_state["post_action_success"] = "文献を削除しました。"
                 if delete_result.get("storage_errors"):
+                    logger.warning(
+                        "Failed to delete storage files after paper deletion: %s",
+                        delete_result["storage_errors"],
+                    )
                     st.session_state["post_action_warning"] = (
-                        "DBからは削除しましたが、Storageファイル削除に失敗しました: "
-                        + " / ".join(delete_result["storage_errors"])
+                        "文献は削除しましたが、一部の添付ファイルが残っている可能性があります。"
                     )
                 for key in ("list_selected_paper_id", "detail_selected_paper_id"):
                     if str(st.session_state.get(key, "")) == str(paper_id):
@@ -1456,7 +1459,7 @@ def render_paper_delete_control(paper, user_id, key_prefix="paper"):
                 st.rerun()
             except Exception as error:
                 logger.exception("Failed to delete paper")
-                st.error(f"削除に失敗しました: {error}")
+                st.error("削除できませんでした。時間をおいてもう一度お試しください。")
 
 
 def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
@@ -1477,11 +1480,11 @@ def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
                 tags_text,
             )
             clear_library_caches()
-            st.success("タグを更新しました")
+            st.success("タグを保存しました。")
             st.rerun()
         except Exception:
             logger.exception("Failed to update paper tags")
-            st.error("タグの更新に失敗しました。入力内容とログを確認してください。")
+            st.error("タグを保存できませんでした。入力内容を確認して、もう一度お試しください。")
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -1617,7 +1620,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
         annotations = fetch_pdf_annotations(supabase, user_id, paper_id)
     except Exception:
         logger.exception("Failed to fetch PDF annotations")
-        st.warning("PDF注釈を取得できませんでした。migration と RLS を確認してください。")
+        st.warning("PDF注釈を取得できませんでした。時間をおいてもう一度お試しください。")
         annotations = []
 
     current_page_annotations = [
@@ -1723,7 +1726,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                 width_pct = st.number_input("幅(%)", min_value=1.0, max_value=100.0, value=84.0, step=1.0, key=f"{form_key}_rect_width")
             with rect_cols[3]:
                 height_pct = st.number_input("高さ(%)", min_value=1.0, max_value=100.0, value=18.0, step=1.0, key=f"{form_key}_rect_height")
-        submitted = st.form_submit_button("このページに注釈を追加")
+        submitted = st.form_submit_button("注釈を保存")
         if submitted:
             effective_text = selected_text.strip() or (selected_block.get("text") if selected_block else "")
             if not effective_text.strip() and not note.strip():
@@ -1751,11 +1754,11 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                         color,
                         rect=annotation_rect,
                     )
-                    st.success("PDF注釈を追加しました。")
+                    st.success("PDF注釈を保存しました。")
                     st.rerun()
                 except Exception:
                     logger.exception("Failed to create PDF annotation")
-                    st.error("PDF注釈の追加に失敗しました。migration と RLS を確認してください。")
+                    st.error("PDF注釈を保存できませんでした。時間をおいてもう一度お試しください。")
 
     if not annotations:
         st.info("このPDFにはまだ注釈がありません。")
@@ -1821,7 +1824,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                     action_col1, action_col2, action_col3, action_col4 = st.columns(4)
                     with action_col1:
                         if st.button(
-                            "注釈を保存",
+                            "変更を保存",
                             key=f"{key_prefix}_annotation_save_{annotation_id}",
                             use_container_width=True,
                         ):
@@ -1835,14 +1838,14 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                                     edit_note,
                                     edit_color,
                                 )
-                                st.success("注釈を更新しました。")
+                                st.success("注釈を保存しました。")
                                 st.rerun()
                             except Exception:
                                 logger.exception("Failed to update PDF annotation")
-                                st.error("注釈の更新に失敗しました。")
+                                st.error("注釈を保存できませんでした。")
                     with action_col2:
                         if st.button(
-                            "注釈を削除",
+                            "削除",
                             key=f"{key_prefix}_annotation_delete_{annotation_id}",
                             use_container_width=True,
                         ):
@@ -1852,7 +1855,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                                 st.rerun()
                             except Exception:
                                 logger.exception("Failed to delete PDF annotation")
-                                st.error("注釈の削除に失敗しました。")
+                                st.error("注釈を削除できませんでした。")
                     with action_col3:
                         render_annotation_to_citation_button(
                             paper,
@@ -1910,7 +1913,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
             pdf_bytes = response.content
         except requests.RequestException:
             logger.exception("Failed to fetch PDF for download")
-            st.caption("ダウンロード準備に失敗しました。PDFを開くボタンを使ってください。")
+            st.caption("PDFのダウンロードを準備できませんでした。PDFを開くボタンを使ってください。")
         else:
             safe_title = re.sub(r"[^A-Za-z0-9._-]+", "-", paper.get("title") or "paper").strip("-")
             st.download_button(
@@ -2025,7 +2028,7 @@ def render_gemini_summary_tool(row_dict, user_id, notes_parts, key_prefix):
             st.success("Gemini要約を生成しました。")
         except Exception as error:
             logger.exception("Failed to summarize paper with Gemini")
-            st.error(f"Gemini要約に失敗しました: {error}")
+            st.error("AI要約を作成できませんでした。時間をおいてもう一度お試しください。")
 
     summary_text = st.session_state.get(summary_key, "")
     source_flags = st.session_state.get(source_key) or {}
@@ -2696,7 +2699,7 @@ def render_import_candidates(candidates, existing_records, key_prefix, pdf_files
         "インポート時に追加するタグ（任意・カンマ区切り）",
         key=f"{key_prefix}_tags",
     )
-    if st.button("候補をインポート", key=f"{key_prefix}_apply"):
+    if st.button("選択内容でインポート", key=f"{key_prefix}_apply"):
         imported_count = 0
         skipped_count = 0
         updated_count = 0
@@ -2745,7 +2748,7 @@ def render_import_candidates(candidates, existing_records, key_prefix, pdf_files
                 imported_count += 1
         clear_library_caches()
         st.success(
-            f"インポートしました: 追加 {imported_count}件 / 更新 {updated_count}件 / "
+            f"インポート完了: 追加 {imported_count}件 / 更新 {updated_count}件 / "
             f"スキップ {skipped_count}件 / 失敗 {failed_count}件"
         )
         st.rerun()
@@ -2868,7 +2871,8 @@ if "user_id" not in st.session_state:
                     else:
                         st.success("登録しました。メール確認後にログインしてください。")
                 except Exception as error:
-                    st.error(f"登録失敗: {error}")
+                    logger.exception("Failed to register user")
+                    st.error("登録できませんでした。メールアドレスとパスワードを確認してください。")
     else:
         if submitted:
             normalized_email = normalize_email(email)
@@ -2889,7 +2893,7 @@ if "user_id" not in st.session_state:
                     if "Email not confirmed" in error_text:
                         st.error("メール確認がまだ完了していません。確認メールをご確認ください。")
                     else:
-                        st.error(f"ログイン失敗: {error}")
+                        st.error("ログインできませんでした。メールアドレスとパスワードを確認してください。")
 
     st.stop()
 
@@ -2958,28 +2962,28 @@ if menu == "追加":
     doi = st.text_input("DOI", value=st.session_state.get("doi", ""))
     url = st.text_input("URL", value=st.session_state.get("url", ""))
 
-    if st.button("DOIから自動入力"):
+    if st.button("DOIで候補を取得"):
         result = fetch_doi(doi)
         if result:
             for field_name, value in zip(DOI_FORM_FIELDS, result):
                 st.session_state[field_name] = value
             st.rerun()
-        st.error("取得失敗")
+        st.error("DOIから文献情報を取得できませんでした。DOIを確認してください。")
 
-    if st.button("URLから自動入力"):
+    if st.button("URLで候補を取得"):
         result = fetch_url_metadata(url)
         if result:
             for field_name, value in zip(URL_FORM_FIELDS, result):
                 st.session_state[field_name] = value
             st.session_state["url"] = normalize_url(url)
             st.rerun()
-        st.error("取得失敗")
+        st.error("URLから文献情報を取得できませんでした。ページURLを確認してください。")
 
     tags = st.text_input("タグ（カンマ区切り）")
     status = st.selectbox("読書ステータス", READING_STATUSES)
     notes = st.text_area("抄録メモ", height=150)
 
-    if st.button("追加"):
+    if st.button("文献を追加"):
         normalized_doi = normalize_doi(doi)
         normalized_url = normalize_url(url)
 
@@ -3028,10 +3032,10 @@ if menu == "追加":
             else:
                 save_tags_for_paper(supabase, user_id, created_paper["id"], tags)
             clear_library_caches()
-            st.success("追加しました！")
+            st.success("文献を追加しました。")
         except Exception:
             logger.exception("Failed to add paper")
-            st.error("保存に失敗しました。入力内容とログを確認してください。")
+            st.error("文献を追加できませんでした。入力内容を確認して、もう一度お試しください。")
 
 
 elif menu == "検索":
@@ -3295,7 +3299,7 @@ elif menu == "一覧":
                     "追加するタグ（カンマ区切り）",
                     key="list_bulk_tags",
                 )
-                if st.button("選択文献にタグ追加", key="apply_bulk_tags"):
+                if st.button("選択文献にタグを追加", key="apply_bulk_tags"):
                     if not selected_bulk_records:
                         st.error("対象文献を選択してください。")
                     else:
@@ -3350,7 +3354,7 @@ elif menu == "一覧":
                     READING_STATUSES,
                     key="list_bulk_status",
                 )
-                if st.button("選択文献のステータス変更", key="apply_bulk_status"):
+                if st.button("選択文献のステータスを変更", key="apply_bulk_status"):
                     if not selected_bulk_records:
                         st.error("対象文献を選択してください。")
                     else:
@@ -3443,7 +3447,7 @@ elif menu == "一覧":
                                 )
                             except Exception:
                                 logger.exception("Failed to build bulk PDF ZIP")
-                                st.error("PDF ZIPの作成に失敗しました。ログを確認してください。")
+                                st.error("PDFをまとめられませんでした。対象文献を確認して、もう一度お試しください。")
                             else:
                                 st.session_state["bulk_pdf_zip_result"] = pdf_zip_result
                                 st.session_state["bulk_pdf_zip_signature"] = pdf_signature
@@ -3541,7 +3545,7 @@ elif menu == "一覧":
                     "候補を確認しました。空欄のDOIと不足している巻・号・ページ・出版社を更新します。",
                     key="apply_missing_doi_confirm",
                 )
-                if st.button("候補を適用", key="apply_missing_doi_candidates"):
+                if st.button("確認して適用", key="apply_missing_doi_candidates"):
                     if not apply_confirm:
                         st.error("適用するには確認チェックを入れてください。")
                     else:
@@ -3653,7 +3657,7 @@ elif menu == "一覧":
                     "候補を確認しました。空欄の巻・号・ページ・出版社だけを補完します。",
                     key="apply_doi_metadata_confirm",
                 )
-                if st.button("メタデータ候補を適用", key="apply_doi_metadata_candidates"):
+                if st.button("確認して補完", key="apply_doi_metadata_candidates"):
                     if not metadata_confirm:
                         st.error("適用するには確認チェックを入れてください。")
                     else:
@@ -3965,7 +3969,7 @@ elif menu == "一覧":
                     detail_col1, detail_col2 = st.columns(2)
                     with detail_col1:
                         if st.button(
-                            "詳細画面で開く",
+                            "詳細を開く",
                             key=f"list_pane_open_detail_{selected_list_paper['id']}",
                             use_container_width=True,
                         ):
@@ -4192,9 +4196,12 @@ elif menu == "一覧":
                             clear_library_caches()
                             st.session_state["post_action_success"] = "文献を削除しました。"
                             if delete_result.get("storage_errors"):
+                                logger.warning(
+                                    "Failed to delete storage files after paper deletion: %s",
+                                    delete_result["storage_errors"],
+                                )
                                 st.session_state["post_action_warning"] = (
-                                    "DBからは削除しましたが、Storageファイル削除に失敗しました: "
-                                    + " / ".join(delete_result["storage_errors"])
+                                    "文献は削除しましたが、一部の添付ファイルが残っている可能性があります。"
                                 )
                             st.rerun()
 
@@ -4779,7 +4786,7 @@ elif menu == "コレクション":
         collections = collections_result.data or []
     except Exception:
         logger.exception("Failed to fetch collections")
-        st.error("コレクションを取得できませんでした。Supabaseで collection migration を適用してください。")
+        st.error("コレクションを取得できませんでした。時間をおいてもう一度お試しください。")
         st.stop()
 
     with st.form("new_collection_form"):
@@ -5140,7 +5147,7 @@ elif menu == "重複確認":
                         key=f"restore_merge_backup_confirm_{backup['id']}",
                     )
                     if st.button(
-                        "残す文献を統合前メタデータに復元",
+                        "確認してメタデータを復元",
                         key=f"restore_merge_backup_{backup['id']}",
                     ):
                         if restore_confirm != "復元":
@@ -5154,7 +5161,7 @@ elif menu == "重複確認":
                                 )
                             except Exception as error:
                                 logger.exception("Failed to restore duplicate merge backup")
-                                st.error(f"復元に失敗しました: {error}")
+                                st.error("復元できませんでした。時間をおいてもう一度お試しください。")
                             else:
                                 clear_library_caches()
                                 st.success(
@@ -5168,7 +5175,7 @@ elif menu == "重複確認":
                         key=f"restore_duplicate_backup_confirm_{backup['id']}",
                     )
                     if st.button(
-                        "統合元文献をスナップショットから再作成",
+                        "確認して統合元を再作成",
                         key=f"restore_duplicate_backup_{backup['id']}",
                     ):
                         if duplicate_restore_confirm != "再作成":
@@ -5182,7 +5189,7 @@ elif menu == "重複確認":
                                 )
                             except Exception as error:
                                 logger.exception("Failed to restore duplicate from backup")
-                                st.error(f"統合元の再作成に失敗しました: {error}")
+                                st.error("統合元を再作成できませんでした。時間をおいてもう一度お試しください。")
                             else:
                                 clear_library_caches()
                                 st.success(
@@ -5332,7 +5339,7 @@ elif menu == "重複確認":
                                         "duplicate" if choice == "統合元の値" else "keeper"
                                     )
 
-                if st.button("選択した文献を統合", key=f"merge_button_{index}"):
+                if st.button("確認して統合", key=f"merge_button_{index}"):
                     if merge_confirm != "統合":
                         st.error("確認文字列が一致しません。")
                     elif not merge_labels:
@@ -5365,7 +5372,7 @@ elif menu == "重複確認":
                             st.error(str(error))
                         except Exception as error:
                             logger.exception("Failed to merge duplicate papers")
-                            st.error(f"統合に失敗しました: {error}")
+                            st.error("統合できませんでした。対象文献を確認して、もう一度お試しください。")
 
                 st.subheader("削除")
                 delete_labels = st.multiselect(
@@ -5377,7 +5384,7 @@ elif menu == "重複確認":
                     "削除する場合は「削除」と入力",
                     key=f"delete_confirm_{index}",
                 )
-                if st.button("選択した文献を削除", key=f"delete_button_{index}"):
+                if st.button("確認して削除", key=f"delete_button_{index}"):
                     if delete_confirm != "削除":
                         st.error("確認文字列が一致しません。")
                     elif not delete_labels:
@@ -5420,14 +5427,17 @@ elif menu == "重複確認":
                                 clear_library_caches()
                                 st.session_state["post_action_success"] = "選択した文献を削除しました。"
                                 if storage_errors:
+                                    logger.warning(
+                                        "Failed to delete storage files after duplicate deletion: %s",
+                                        storage_errors,
+                                    )
                                     st.session_state["post_action_warning"] = (
-                                        "DBからは削除しましたが、Storageファイル削除に失敗しました: "
-                                        + " / ".join(storage_errors)
+                                        "文献は削除しましたが、一部の添付ファイルが残っている可能性があります。"
                                     )
                                 st.rerun()
                         except Exception as error:
                             logger.exception("Failed to delete duplicate papers")
-                            st.error(f"削除に失敗しました: {error}")
+                            st.error("削除できませんでした。時間をおいてもう一度お試しください。")
 
 
 elif menu == "文書引用":
@@ -5440,8 +5450,7 @@ elif menu == "文書引用":
     except Exception:
         logger.exception("Failed to fetch documents")
         st.error(
-            "文書引用を取得できませんでした。"
-            " Supabaseで documents / document_citations / paper_items_view の migration を確認してください。"
+            "文書引用を取得できませんでした。時間をおいてもう一度お試しください。"
         )
         st.stop()
 
@@ -5473,7 +5482,7 @@ elif menu == "文書引用":
                 key=f"delete_document_confirm_{selected_document['id']}",
             )
             if st.button(
-                "同期文書を削除",
+                "確認して同期記録を削除",
                 key=f"delete_document_{selected_document['id']}",
                 disabled=confirm_title != selected_document_title,
             ):
@@ -5483,7 +5492,7 @@ elif menu == "文書引用":
                     st.rerun()
                 except Exception as error:
                     logger.exception("Failed to delete document")
-                    st.error(f"削除に失敗しました: {error}")
+                    st.error("同期記録を削除できませんでした。時間をおいてもう一度お試しください。")
 
         document_style_label, document_style = render_csl_style_selector(
             f"document_csl_style_{selected_document['id']}",
@@ -5511,7 +5520,7 @@ elif menu == "文書引用":
                     st.rerun()
                 except Exception as error:
                     logger.exception("Failed to update document CSL style")
-                    st.error(f"CSLスタイルの保存に失敗しました: {error}")
+                    st.error("CSLスタイルを保存できませんでした。時間をおいてもう一度お試しください。")
 
         try:
             citations_result = fetch_document_citations(supabase, selected_document["id"])
@@ -5592,7 +5601,7 @@ elif menu == "文書引用":
                     if context_text:
                         st.write(f"引用に使った文: {context_text}")
                     else:
-                        st.caption("引用に使った文はまだ同期されていません。Wordアドインで参考文献を更新すると反映されます。")
+                        st.caption("引用に使った文はまだ同期されていません。Wordアドインで参考文献を更新すると表示されます。")
 
                     items = citation.get("citation_items") or []
                     if items:
@@ -5644,7 +5653,7 @@ elif menu == "文書引用":
                         edit_col1, edit_col2 = st.columns(2)
                         with edit_col1:
                             if st.button(
-                                "引用行を保存",
+                                "変更を保存",
                                 key=f"save_document_citation_{citation['id']}",
                                 use_container_width=True,
                             ):
@@ -5656,7 +5665,7 @@ elif menu == "文書引用":
                                     context_text=edited_context_text,
                                     sort_order=edited_sort_order,
                                 )
-                                st.success("引用行を更新しました。")
+                                st.success("引用行を保存しました。")
                                 st.rerun()
                         with edit_col2:
                             delete_confirm = st.text_input(
@@ -5664,7 +5673,7 @@ elif menu == "文書引用":
                                 key=f"delete_document_citation_confirm_{citation['id']}",
                             )
                             if st.button(
-                                "この引用行を削除",
+                                "確認して引用行を削除",
                                 key=f"delete_document_citation_{citation['id']}",
                                 disabled=delete_confirm != "削除",
                                 use_container_width=True,
