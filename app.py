@@ -1491,6 +1491,42 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     return page_count, safe_page_number, pixmap.tobytes("png")
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def extract_pdf_page_text_blocks(pdf_bytes, page_number):
+    if fitz is None:
+        return []
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page_count = document.page_count
+    safe_page_number = min(max(int(page_number or 1), 1), max(page_count, 1))
+    page = document.load_page(safe_page_number - 1)
+    page_width = max(float(page.rect.width), 1.0)
+    page_height = max(float(page.rect.height), 1.0)
+    blocks = []
+    for block in page.get_text("blocks") or []:
+        if len(block) >= 7 and block[6] != 0:
+            continue
+        try:
+            x0, y0, x1, y1 = (float(block[0]), float(block[1]), float(block[2]), float(block[3]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        text = re.sub(r"\s+", " ", str(block[4] if len(block) > 4 else "")).strip()
+        if len(text) < 12:
+            continue
+        x = max(0.0, min(x0 / page_width, 1.0))
+        y = max(0.0, min(y0 / page_height, 1.0))
+        width = max(0.01, min((x1 - x0) / page_width, 1.0 - x))
+        height = max(0.01, min((y1 - y0) / page_height, 1.0 - y))
+        blocks.append(
+            {
+                "text": text,
+                "rect": {"x": x, "y": y, "width": width, "height": height},
+                "label": text[:120] + ("..." if len(text) > 120 else ""),
+            }
+        )
+    blocks.sort(key=lambda item: (item["rect"]["y"], item["rect"]["x"]))
+    return blocks[:80]
+
+
 def annotation_rect_from_position(position_mode, x_pct, y_pct, width_pct, height_pct):
     presets = {
         "ページ上部": {"x": 0.08, "y": 0.08, "width": 0.84, "height": 0.18},
@@ -1549,7 +1585,7 @@ def render_annotation_preview_image(page_image, annotations, pending_rect=None):
     return Image.alpha_composite(preview, overlay).convert("RGB")
 
 
-def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper", page_state_key=None, page_image_bytes=None):
+def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper", page_state_key=None, page_image_bytes=None, pdf_bytes=None):
     paper_id = str(paper.get("id"))
     try:
         annotations = fetch_pdf_annotations(supabase, user_id, paper_id)
@@ -1569,6 +1605,13 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
     )
     type_labels = {value: key for key, value in PDF_ANNOTATION_TYPES.items()}
     form_key = f"{key_prefix}_pdf_annotation_form_{paper_id}_{page_number}"
+    text_blocks = []
+    if pdf_bytes:
+        try:
+            text_blocks = extract_pdf_page_text_blocks(pdf_bytes, page_number)
+        except Exception:
+            logger.exception("Failed to extract PDF text blocks")
+            text_blocks = []
     if page_image_bytes and Image:
         try:
             page_image = Image.open(io.BytesIO(page_image_bytes))
@@ -1587,10 +1630,20 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
             index=1,
             key=f"{form_key}_type",
         )
+        selected_block_index = st.selectbox(
+            "PDF本文から選択",
+            list(range(len(text_blocks) + 1)),
+            format_func=lambda index: "選択しない" if index == 0 else text_blocks[index - 1]["label"],
+            key=f"{form_key}_text_block",
+            help="選ぶと、その本文とPDF上の位置をまとめて保存します。",
+        )
+        if not text_blocks:
+            st.caption("このページから本文ブロックを抽出できませんでした。手入力で注釈を追加できます。")
         selected_text = st.text_area(
             "ハイライトした文・引用したい文",
             height=90,
             key=f"{form_key}_selected_text",
+            placeholder="PDF本文から選んだ場合は空欄でも保存できます。",
         )
         note = st.text_area(
             "メモ",
@@ -1610,10 +1663,10 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
         )
         position_mode = st.selectbox(
             "ハイライト位置",
-            ["位置なし", "ページ上部", "ページ中央", "ページ下部", "左側", "右側", "手動入力"],
+            ["PDF本文の位置", "位置なし", "ページ上部", "ページ中央", "ページ下部", "左側", "右側", "手動入力"],
             key=f"{form_key}_position_mode",
         )
-        st.caption("細かく指定する場合は「手動入力」を選び、ページ全体を100%として入力します。")
+        st.caption("PDF本文から選んだ場合は「PDF本文の位置」のままで保存できます。細かく指定する場合だけ「手動入力」を使います。")
         rect_cols = st.columns(4)
         with rect_cols[0]:
             x_pct = st.number_input("左(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_x")
@@ -1625,16 +1678,21 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
             height_pct = st.number_input("高さ(%)", min_value=1.0, max_value=100.0, value=18.0, step=1.0, key=f"{form_key}_rect_height")
         submitted = st.form_submit_button("このページに注釈を追加")
         if submitted:
-            if not selected_text.strip() and not note.strip():
+            selected_block = text_blocks[selected_block_index - 1] if selected_block_index else None
+            effective_text = selected_text.strip() or (selected_block.get("text") if selected_block else "")
+            if not effective_text.strip() and not note.strip():
                 st.error("ハイライト文またはメモを入力してください。")
             else:
-                annotation_rect = annotation_rect_from_position(
-                    position_mode,
-                    x_pct,
-                    y_pct,
-                    width_pct,
-                    height_pct,
-                )
+                if position_mode == "PDF本文の位置":
+                    annotation_rect = selected_block.get("rect") if selected_block else None
+                else:
+                    annotation_rect = annotation_rect_from_position(
+                        position_mode,
+                        x_pct,
+                        y_pct,
+                        width_pct,
+                        height_pct,
+                    )
                 try:
                     create_pdf_annotation(
                         supabase,
@@ -1642,7 +1700,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                         paper_id,
                         page_number,
                         type_labels[annotation_type_label],
-                        selected_text,
+                        effective_text,
                         note,
                         color,
                         rect=annotation_rect,
@@ -1864,6 +1922,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                         key_prefix=key_prefix,
                         page_state_key=page_key,
                         page_image_bytes=png_bytes,
+                        pdf_bytes=pdf_bytes,
                     )
                     annotations_rendered = True
     if user_id and not annotations_rendered:
