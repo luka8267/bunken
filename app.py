@@ -77,6 +77,7 @@ from paper_utils import (
     fetch_paper_collection_ids,
     fetch_papers_for_collection,
     find_existing_user_paper_by_doi,
+    describe_duplicate_group,
     fetch_user_papers,
     fetch_user_papers_by_ids,
     fetch_user_collections,
@@ -5251,7 +5252,17 @@ elif menu == "重複確認":
             reason = group["reason"]
             value = group["value"]
             group_papers = group["papers"]
-            with st.expander(f"{index}. {reason}: {value} ({len(group_papers)}件)"):
+            duplicate_summary = describe_duplicate_group(group)
+            with st.expander(
+                f"{index}. {duplicate_summary['level']} / {reason}: {value} ({len(group_papers)}件)"
+            ):
+                summary_col1, summary_col2 = st.columns([1, 3])
+                with summary_col1:
+                    st.metric("重複可能性", f"{duplicate_summary['score']}%")
+                with summary_col2:
+                    st.write("判定理由: " + " / ".join(duplicate_summary["evidence"]))
+                    st.caption(duplicate_summary["advice"])
+                st.divider()
                 paper_by_label = {
                     format_duplicate_option_label(paper): paper
                     for paper in group_papers

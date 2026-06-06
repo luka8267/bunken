@@ -269,6 +269,79 @@ def find_duplicate_paper_groups(papers):
     return duplicate_groups
 
 
+def describe_duplicate_group(group):
+    reason = group.get("reason") or ""
+    papers = group.get("papers") or []
+    dois = {
+        normalize_doi(paper.get("doi")).casefold()
+        for paper in papers
+        if normalize_doi(paper.get("doi"))
+    }
+    titles = {
+        normalize_title_for_match(paper.get("title"))
+        for paper in papers
+        if normalize_title_for_match(paper.get("title"))
+    }
+    years = {
+        str(paper.get("year") or "").strip()
+        for paper in papers
+        if str(paper.get("year") or "").strip()
+    }
+    authors = {
+        normalize_author_list(paper.get("authors")).casefold()
+        for paper in papers
+        if normalize_author_list(paper.get("authors"))
+    }
+    journals = {
+        normalize_journal_title(paper.get("journal")).casefold()
+        for paper in papers
+        if normalize_journal_title(paper.get("journal"))
+    }
+
+    evidence = []
+    score = 0
+    if reason == "DOI" or (len(dois) == 1 and dois):
+        score += 80
+        evidence.append("DOIが一致")
+    if len(titles) == 1 and titles:
+        score += 25
+        evidence.append("タイトルが一致")
+    if len(authors) == 1 and authors:
+        score += 15
+        evidence.append("著者が一致")
+    if len(journals) == 1 and journals:
+        score += 10
+        evidence.append("雑誌名が一致")
+    if len(years) == 1 and years:
+        score += 10
+        evidence.append("年が一致")
+    elif len(years) > 1:
+        score -= 15
+        evidence.append("年が異なる")
+
+    if reason == "タイトル類似" and not dois:
+        score = min(score, 55)
+        evidence.append("DOIなしのタイトル一致")
+
+    score = max(0, min(score, 100))
+    if score >= 80:
+        level = "強い候補"
+        advice = "同じ文献である可能性が高いです。残す文献と補完する値を確認して統合してください。"
+    elif score >= 55:
+        level = "中程度"
+        advice = "同じ文献の可能性があります。著者、年、雑誌名を確認してから統合してください。"
+    else:
+        level = "要確認"
+        advice = "誤統合の可能性があります。内容をよく確認し、迷う場合は統合しないでください。"
+
+    return {
+        "score": score,
+        "level": level,
+        "evidence": list(dict.fromkeys(evidence)) or [reason or "条件一致"],
+        "advice": advice,
+    }
+
+
 def normalize_tag_input(tags_text):
     seen = set()
     normalized = []

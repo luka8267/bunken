@@ -19,6 +19,7 @@ from paper_utils import (
     fetch_paper_collection_ids,
     filter_papers,
     filter_document_citations,
+    describe_duplicate_group,
     find_duplicate_paper_groups,
     get_document_citation_usage_map,
     get_tag_map_for_papers,
@@ -308,6 +309,60 @@ class PaperUtilsCollectionTests(unittest.TestCase):
         )
 
         self.assertTrue(any(group["reason"] == "タイトル+著者" for group in groups))
+
+    def test_describe_duplicate_group_scores_doi_match_as_strong(self):
+        summary = describe_duplicate_group(
+            {
+                "reason": "DOI",
+                "papers": [
+                    {
+                        "title": "Same Title",
+                        "authors": "Alice A.",
+                        "journal": "Journal",
+                        "year": "2024",
+                        "doi": "https://doi.org/10.1000/example",
+                    },
+                    {
+                        "title": "Same Title",
+                        "authors": "Alice A.",
+                        "journal": "Journal",
+                        "year": "2024",
+                        "doi": "10.1000/example",
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(summary["level"], "強い候補")
+        self.assertGreaterEqual(summary["score"], 80)
+        self.assertIn("DOIが一致", summary["evidence"])
+
+    def test_describe_duplicate_group_marks_title_only_as_review_needed(self):
+        summary = describe_duplicate_group(
+            {
+                "reason": "タイトル類似",
+                "papers": [
+                    {
+                        "title": "Same Title",
+                        "authors": "Alice A.",
+                        "journal": "Journal A",
+                        "year": "2023",
+                        "doi": "",
+                    },
+                    {
+                        "title": "Same Title",
+                        "authors": "Bob B.",
+                        "journal": "Journal B",
+                        "year": "2024",
+                        "doi": "",
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(summary["level"], "要確認")
+        self.assertLess(summary["score"], 55)
+        self.assertIn("DOIなしのタイトル一致", summary["evidence"])
 
     def test_make_bibtex_entry_includes_publication_metadata(self):
         entry = make_bibtex_entry(
