@@ -1081,6 +1081,26 @@ def render_annotation_to_citation_button(paper, user_id, annotation, key_prefix)
             st.error("引用予定メモに追加できませんでした。時間をおいてもう一度お試しください。")
 
 
+def filter_annotations_by_keyword(annotations, keyword):
+    query = clean_display_text(keyword).casefold()
+    if not query:
+        return annotations
+    filtered = []
+    for annotation in annotations or []:
+        haystack = " ".join(
+            clean_display_text(value)
+            for value in (
+                annotation.get("selected_text"),
+                annotation.get("note"),
+                annotation.get("annotation_type"),
+                annotation.get("page_number"),
+            )
+        ).casefold()
+        if query in haystack:
+            filtered.append(annotation)
+    return filtered
+
+
 def render_pdf_annotation_summary(paper, user_id, key_prefix="paper", page_state_key=None):
     paper_id = str(paper.get("id"))
     try:
@@ -1095,8 +1115,18 @@ def render_pdf_annotation_summary(paper, user_id, key_prefix="paper", page_state
         st.info("この文献にはPDF注釈がまだありません。")
         return
 
-    st.caption(f"{len(annotations)}件の注釈")
-    for annotation in annotations:
+    search_keyword = st.text_input(
+        "注釈を検索",
+        key=f"{key_prefix}_annotation_summary_search_{paper_id}",
+        placeholder="本文、メモ、ページ番号で検索",
+    )
+    visible_annotations = filter_annotations_by_keyword(annotations, search_keyword)
+    st.caption(f"{len(visible_annotations)} / {len(annotations)}件の注釈")
+    if not visible_annotations:
+        st.info("条件に一致する注釈はありません。")
+        return
+
+    for annotation in visible_annotations:
         label = PDF_ANNOTATION_TYPES.get(
             annotation.get("annotation_type"),
             annotation.get("annotation_type") or "注釈",
@@ -1106,7 +1136,7 @@ def render_pdf_annotation_summary(paper, user_id, key_prefix="paper", page_state
             if annotation.get("selected_text"):
                 st.write(annotation["selected_text"])
             if annotation.get("note"):
-                st.caption(annotation["note"])
+                st.caption(f"メモ: {annotation['note']}")
             if page_state_key and st.button(
                 "このページへ移動",
                 key=f"{key_prefix}_summary_go_page_{annotation['id']}",
@@ -1770,8 +1800,17 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
         (annotation_tabs[1], annotations),
     ):
         with tab:
+            annotation_search_keyword = st.text_input(
+                "注釈を検索",
+                key=f"{key_prefix}_annotation_search_{paper_id}_{page_number}_{'page' if visible_annotations is current_page_annotations else 'all'}",
+                placeholder="本文、メモ、ページ番号で検索",
+            )
+            visible_annotations = filter_annotations_by_keyword(
+                visible_annotations,
+                annotation_search_keyword,
+            )
             if not visible_annotations:
-                st.write("注釈はありません。")
+                st.write("表示できる注釈はありません。")
                 continue
             for annotation in visible_annotations:
                 annotation_id = annotation["id"]
