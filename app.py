@@ -1068,6 +1068,15 @@ def append_annotation_to_citation_note(paper, user_id, annotation):
 
 
 def render_annotation_to_citation_button(paper, user_id, annotation, key_prefix):
+    if annotation_is_in_citation_note(paper, annotation):
+        st.button(
+            "引用予定メモに追加済み",
+            key=f"{key_prefix}_annotation_to_citation_done_{annotation['id']}",
+            disabled=True,
+            use_container_width=True,
+        )
+        return
+
     if st.button(
         "引用予定メモに追加",
         key=f"{key_prefix}_annotation_to_citation_{annotation['id']}",
@@ -1082,12 +1091,29 @@ def render_annotation_to_citation_button(paper, user_id, annotation, key_prefix)
             st.error("引用予定メモに追加できませんでした。時間をおいてもう一度お試しください。")
 
 
-def filter_annotations_by_keyword(annotations, keyword):
+def annotation_is_in_citation_note(paper, annotation):
+    annotation_note = build_annotation_citation_note(annotation)
+    if not annotation_note.strip():
+        return False
+    notes_parts = split_structured_notes(paper.get("notes"))
+    return annotation_note in notes_parts.get("citation", "")
+
+
+def filter_annotations_by_keyword(annotations, keyword, annotation_type=""):
     query = clean_display_text(keyword).casefold()
-    if not query:
+    type_filter = clean_display_text(annotation_type)
+    if not query and not type_filter:
         return annotations
+    if not query:
+        return [
+            annotation
+            for annotation in annotations or []
+            if annotation.get("annotation_type") == type_filter
+        ]
     filtered = []
     for annotation in annotations or []:
+        if type_filter and annotation.get("annotation_type") != type_filter:
+            continue
         haystack = " ".join(
             clean_display_text(value)
             for value in (
@@ -1116,12 +1142,31 @@ def render_pdf_annotation_summary(paper, user_id, key_prefix="paper", page_state
         st.info("この文献にはPDF注釈がまだありません。")
         return
 
-    search_keyword = st.text_input(
-        "注釈を検索",
-        key=f"{key_prefix}_annotation_summary_search_{paper_id}",
-        placeholder="本文、メモ、ページ番号で検索",
+    filter_col1, filter_col2 = st.columns([2, 1])
+    with filter_col1:
+        search_keyword = st.text_input(
+            "注釈を検索",
+            key=f"{key_prefix}_annotation_summary_search_{paper_id}",
+            placeholder="本文、メモ、ページ番号で検索",
+        )
+    with filter_col2:
+        type_label_by_value = {value: label for value, label in PDF_ANNOTATION_TYPES.items()}
+        selected_type_label = st.selectbox(
+            "種類",
+            ["すべて", *type_label_by_value.values()],
+            key=f"{key_prefix}_annotation_summary_type_{paper_id}",
+        )
+    selected_type = ""
+    if selected_type_label != "すべて":
+        selected_type = {
+            label: value
+            for value, label in PDF_ANNOTATION_TYPES.items()
+        }.get(selected_type_label, "")
+    visible_annotations = filter_annotations_by_keyword(
+        annotations,
+        search_keyword,
+        selected_type,
     )
-    visible_annotations = filter_annotations_by_keyword(annotations, search_keyword)
     st.caption(f"{len(visible_annotations)} / {len(annotations)}件の注釈")
     if not visible_annotations:
         st.info("条件に一致する注釈はありません。")
@@ -1801,14 +1846,27 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
         (annotation_tabs[1], annotations),
     ):
         with tab:
-            annotation_search_keyword = st.text_input(
-                "注釈を検索",
-                key=f"{key_prefix}_annotation_search_{paper_id}_{page_number}_{'page' if visible_annotations is current_page_annotations else 'all'}",
-                placeholder="本文、メモ、ページ番号で検索",
-            )
+            tab_scope = "page" if visible_annotations is current_page_annotations else "all"
+            annotation_filter_cols = st.columns([2, 1])
+            with annotation_filter_cols[0]:
+                annotation_search_keyword = st.text_input(
+                    "注釈を検索",
+                    key=f"{key_prefix}_annotation_search_{paper_id}_{page_number}_{tab_scope}",
+                    placeholder="本文、メモ、ページ番号で検索",
+                )
+            with annotation_filter_cols[1]:
+                selected_annotation_type_label = st.selectbox(
+                    "種類",
+                    ["すべて", *type_labels.keys()],
+                    key=f"{key_prefix}_annotation_type_filter_{paper_id}_{page_number}_{tab_scope}",
+                )
+            selected_annotation_type = ""
+            if selected_annotation_type_label != "すべて":
+                selected_annotation_type = type_labels.get(selected_annotation_type_label, "")
             visible_annotations = filter_annotations_by_keyword(
                 visible_annotations,
                 annotation_search_keyword,
+                selected_annotation_type,
             )
             if not visible_annotations:
                 st.write("表示できる注釈はありません。")
