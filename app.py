@@ -36,11 +36,6 @@ except ImportError:
     Image = None
     ImageDraw = None
 
-try:
-    from streamlit_image_coordinates import streamlit_image_coordinates
-except ImportError:
-    streamlit_image_coordinates = None
-
 from auth_utils import (
     build_supabase_client,
     get_current_user_id,
@@ -1496,36 +1491,26 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     return page_count, safe_page_number, pixmap.tobytes("png")
 
 
-def extract_two_click_rect(first_point, second_point, width, height):
-    if not first_point or not second_point:
+def annotation_rect_from_position(position_mode, x_pct, y_pct, width_pct, height_pct):
+    presets = {
+        "ページ上部": {"x": 0.08, "y": 0.08, "width": 0.84, "height": 0.18},
+        "ページ中央": {"x": 0.08, "y": 0.38, "width": 0.84, "height": 0.24},
+        "ページ下部": {"x": 0.08, "y": 0.72, "width": 0.84, "height": 0.18},
+        "左側": {"x": 0.06, "y": 0.08, "width": 0.42, "height": 0.84},
+        "右側": {"x": 0.52, "y": 0.08, "width": 0.42, "height": 0.84},
+    }
+    if position_mode == "位置なし":
         return None
-    if not all(key in first_point for key in ("x", "y")):
-        return None
-    if not all(key in second_point for key in ("x", "y")):
-        return None
+    if position_mode in presets:
+        return presets[position_mode]
     try:
-        x1 = float(first_point.get("x"))
-        y1 = float(first_point.get("y"))
-        x2 = float(second_point.get("x"))
-        y2 = float(second_point.get("y"))
+        x = max(0.0, min(float(x_pct) / 100.0, 1.0))
+        y = max(0.0, min(float(y_pct) / 100.0, 1.0))
+        rect_width = max(0.01, min(float(width_pct) / 100.0, 1.0 - x))
+        rect_height = max(0.01, min(float(height_pct) / 100.0, 1.0 - y))
     except (TypeError, ValueError):
         return None
-    if width <= 0 or height <= 0:
-        return None
-    left = max(0, min(x1, x2, width))
-    top = max(0, min(y1, y2, height))
-    right = max(0, min(max(x1, x2), width))
-    bottom = max(0, min(max(y1, y2), height))
-    rect_width = right - left
-    rect_height = bottom - top
-    if rect_width < 4 or rect_height < 4:
-        return None
-    return {
-        "x": left / width,
-        "y": top / height,
-        "width": rect_width / width,
-        "height": rect_height / height,
-    }
+    return {"x": x, "y": y, "width": rect_width, "height": rect_height}
 
 
 def render_annotation_preview_image(page_image, annotations, pending_rect=None):
@@ -1584,67 +1569,22 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
     )
     type_labels = {value: key for key, value in PDF_ANNOTATION_TYPES.items()}
     form_key = f"{key_prefix}_pdf_annotation_form_{paper_id}_{page_number}"
-    rect_key = f"{key_prefix}_annotation_rect_{paper_id}_{page_number}"
-    corner_key = f"{key_prefix}_annotation_first_corner_{paper_id}_{page_number}"
-    event_key = f"{key_prefix}_annotation_last_event_{paper_id}_{page_number}"
-    selected_rect = st.session_state.get(rect_key)
-    if page_image_bytes and streamlit_image_coordinates and Image:
+    if page_image_bytes and Image:
         try:
             page_image = Image.open(io.BytesIO(page_image_bytes))
         except Exception:
             page_image = None
         if page_image:
-            st.caption("下のPDF画像で、範囲の左上と右下を順番にクリックすると、その位置をハイライト注釈として保存できます。")
-            preview_image = render_annotation_preview_image(
-                page_image,
-                current_page_annotations,
-                selected_rect,
-            )
-            clicked_point = streamlit_image_coordinates(
-                preview_image,
-                width=page_image.width,
-                click_and_drag=False,
-                cursor="crosshair",
-                key=f"{key_prefix}_annotation_image_{paper_id}_{page_number}",
-            )
-            if clicked_point and clicked_point.get("unix_time") != st.session_state.get(event_key):
-                st.session_state[event_key] = clicked_point.get("unix_time")
-                current_point = {"x": clicked_point.get("x"), "y": clicked_point.get("y")}
-                first_point = st.session_state.get(corner_key)
-                if first_point:
-                    selected_rect = extract_two_click_rect(
-                        first_point,
-                        current_point,
-                        page_image.width,
-                        page_image.height,
-                    )
-                    if selected_rect:
-                        st.session_state[rect_key] = selected_rect
-                    st.session_state.pop(corner_key, None)
-                else:
-                    st.session_state[corner_key] = current_point
-                    st.session_state.pop(rect_key, None)
-                st.rerun()
-            if st.session_state.get(corner_key):
-                point = st.session_state[corner_key]
-                st.caption(f"1点目を選択中: x={point.get('x')}, y={point.get('y')}。右下をクリックしてください。")
-            if selected_rect:
-                st.caption(
-                    "選択範囲: "
-                    f"x={selected_rect['x']:.3f}, y={selected_rect['y']:.3f}, "
-                    f"w={selected_rect['width']:.3f}, h={selected_rect['height']:.3f}"
-                )
-                if st.button("選択範囲をクリア", key=f"{key_prefix}_clear_annotation_rect_{paper_id}_{page_number}"):
-                    st.session_state.pop(rect_key, None)
-                    st.session_state.pop(corner_key, None)
-                    st.rerun()
+            st.caption("保存済みの位置つき注釈は、下のPDFプレビューにハイライト表示されます。")
+            preview_image = render_annotation_preview_image(page_image, current_page_annotations)
+            st.image(preview_image, use_container_width=True)
     elif page_image_bytes:
-        st.caption("PDF上の範囲選択には streamlit-image-coordinates が必要です。未導入環境では通常の注釈として保存します。")
+        st.caption("PDFプレビュー用ライブラリを読み込めないため、通常の注釈として保存します。")
     with st.form(form_key):
         annotation_type_label = st.selectbox(
             "種類",
             list(type_labels.keys()),
-            index=0 if selected_rect else 1,
+            index=1,
             key=f"{form_key}_type",
         )
         selected_text = st.text_area(
@@ -1668,11 +1608,33 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
             }.get,
             key=f"{form_key}_color",
         )
+        position_mode = st.selectbox(
+            "ハイライト位置",
+            ["位置なし", "ページ上部", "ページ中央", "ページ下部", "左側", "右側", "手動入力"],
+            key=f"{form_key}_position_mode",
+        )
+        st.caption("細かく指定する場合は「手動入力」を選び、ページ全体を100%として入力します。")
+        rect_cols = st.columns(4)
+        with rect_cols[0]:
+            x_pct = st.number_input("左(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_x")
+        with rect_cols[1]:
+            y_pct = st.number_input("上(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_y")
+        with rect_cols[2]:
+            width_pct = st.number_input("幅(%)", min_value=1.0, max_value=100.0, value=84.0, step=1.0, key=f"{form_key}_rect_width")
+        with rect_cols[3]:
+            height_pct = st.number_input("高さ(%)", min_value=1.0, max_value=100.0, value=18.0, step=1.0, key=f"{form_key}_rect_height")
         submitted = st.form_submit_button("このページに注釈を追加")
         if submitted:
             if not selected_text.strip() and not note.strip():
                 st.error("ハイライト文またはメモを入力してください。")
             else:
+                annotation_rect = annotation_rect_from_position(
+                    position_mode,
+                    x_pct,
+                    y_pct,
+                    width_pct,
+                    height_pct,
+                )
                 try:
                     create_pdf_annotation(
                         supabase,
@@ -1683,10 +1645,8 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                         selected_text,
                         note,
                         color,
-                        rect=selected_rect,
+                        rect=annotation_rect,
                     )
-                    st.session_state.pop(rect_key, None)
-                    st.session_state.pop(corner_key, None)
                     st.success("PDF注釈を追加しました。")
                     st.rerun()
                 except Exception:
