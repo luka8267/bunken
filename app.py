@@ -1081,7 +1081,7 @@ def render_annotation_to_citation_button(paper, user_id, annotation, key_prefix)
             st.error(f"引用予定メモへの反映に失敗しました: {error}")
 
 
-def render_pdf_annotation_summary(paper, user_id, key_prefix="paper"):
+def render_pdf_annotation_summary(paper, user_id, key_prefix="paper", page_state_key=None):
     paper_id = str(paper.get("id"))
     try:
         annotations = fetch_pdf_annotations(supabase, user_id, paper_id)
@@ -1107,6 +1107,13 @@ def render_pdf_annotation_summary(paper, user_id, key_prefix="paper"):
                 st.write(annotation["selected_text"])
             if annotation.get("note"):
                 st.caption(annotation["note"])
+            if page_state_key and st.button(
+                "このページへ移動",
+                key=f"{key_prefix}_summary_go_page_{annotation['id']}",
+                use_container_width=True,
+            ):
+                st.session_state[page_state_key] = int(annotation.get("page_number") or 1)
+                st.rerun()
             render_annotation_to_citation_button(
                 paper,
                 user_id,
@@ -1151,7 +1158,7 @@ def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=
         st.caption(" / ".join(publication_parts))
     missing_metadata_text = format_missing_publication_metadata(paper)
     if missing_metadata_text:
-        st.caption(f"不足メタデータ: {missing_metadata_text}")
+        st.warning(f"メタデータ補完待ち: {missing_metadata_text}")
     if paper.get("doi"):
         st.write(f"DOI: {paper.get('doi')}")
     if paper.get("status"):
@@ -1527,6 +1534,25 @@ def extract_pdf_page_text_blocks(pdf_bytes, page_number):
     return blocks[:80]
 
 
+def filter_pdf_text_blocks(blocks, keyword):
+    query = (keyword or "").strip().lower()
+    if not query:
+        return blocks
+    terms = [term for term in re.split(r"\s+", query) if term]
+    return [
+        block
+        for block in blocks
+        if all(term in block.get("text", "").lower() for term in terms)
+    ]
+
+
+def pdf_block_option_label(block, index):
+    rect = block.get("rect") or {}
+    y_pct = int(round(float(rect.get("y") or 0) * 100))
+    preview = block.get("label") or block.get("text") or ""
+    return f"{index}. p.{y_pct}%  {preview}"
+
+
 def annotation_rect_from_position(position_mode, x_pct, y_pct, width_pct, height_pct):
     presets = {
         "ページ上部": {"x": 0.08, "y": 0.08, "width": 0.84, "height": 0.18},
@@ -1623,6 +1649,16 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
             st.image(preview_image, use_container_width=True)
     elif page_image_bytes:
         st.caption("PDFプレビュー用ライブラリを読み込めないため、通常の注釈として保存します。")
+    block_keyword = ""
+    filtered_text_blocks = text_blocks
+    if text_blocks:
+        block_keyword = st.text_input(
+            "本文候補を検索",
+            key=f"{form_key}_text_block_search",
+            placeholder="キーワードで本文候補を絞り込み",
+        )
+        filtered_text_blocks = filter_pdf_text_blocks(text_blocks, block_keyword)
+        st.caption(f"本文候補: {len(filtered_text_blocks)}件 / {len(text_blocks)}件")
     with st.form(form_key):
         annotation_type_label = st.selectbox(
             "種類",
@@ -1630,17 +1666,27 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
             index=1,
             key=f"{form_key}_type",
         )
+        filtered_block_indexes = [
+            index
+            for index, block in enumerate(text_blocks)
+            if block in filtered_text_blocks
+        ]
+        block_options = [-1] + filtered_block_indexes
         selected_block_index = st.selectbox(
             "PDF本文から選択",
-            list(range(len(text_blocks) + 1)),
-            format_func=lambda index: "選択しない" if index == 0 else text_blocks[index - 1]["label"],
+            block_options,
+            format_func=lambda index: "選択しない" if index < 0 else pdf_block_option_label(text_blocks[index], index + 1),
             key=f"{form_key}_text_block",
             help="選ぶと、その本文とPDF上の位置をまとめて保存します。",
         )
         if not text_blocks:
             st.caption("このページから本文ブロックを抽出できませんでした。手入力で注釈を追加できます。")
+        selected_block = text_blocks[selected_block_index] if selected_block_index >= 0 else None
+        if selected_block:
+            st.info(selected_block["text"])
+            st.caption("この本文は保存時に「ハイライトした文」として自動で保存されます。")
         selected_text = st.text_area(
-            "ハイライトした文・引用したい文",
+            "ハイライトした文・引用したい文（任意で上書き）",
             height=90,
             key=f"{form_key}_selected_text",
             placeholder="PDF本文から選んだ場合は空欄でも保存できます。",
@@ -1666,19 +1712,19 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
             ["PDF本文の位置", "位置なし", "ページ上部", "ページ中央", "ページ下部", "左側", "右側", "手動入力"],
             key=f"{form_key}_position_mode",
         )
-        st.caption("PDF本文から選んだ場合は「PDF本文の位置」のままで保存できます。細かく指定する場合だけ「手動入力」を使います。")
-        rect_cols = st.columns(4)
-        with rect_cols[0]:
-            x_pct = st.number_input("左(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_x")
-        with rect_cols[1]:
-            y_pct = st.number_input("上(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_y")
-        with rect_cols[2]:
-            width_pct = st.number_input("幅(%)", min_value=1.0, max_value=100.0, value=84.0, step=1.0, key=f"{form_key}_rect_width")
-        with rect_cols[3]:
-            height_pct = st.number_input("高さ(%)", min_value=1.0, max_value=100.0, value=18.0, step=1.0, key=f"{form_key}_rect_height")
+        st.caption("PDF本文から選んだ場合は「PDF本文の位置」のままで保存できます。")
+        with st.expander("手動で位置を調整"):
+            rect_cols = st.columns(4)
+            with rect_cols[0]:
+                x_pct = st.number_input("左(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_x")
+            with rect_cols[1]:
+                y_pct = st.number_input("上(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_y")
+            with rect_cols[2]:
+                width_pct = st.number_input("幅(%)", min_value=1.0, max_value=100.0, value=84.0, step=1.0, key=f"{form_key}_rect_width")
+            with rect_cols[3]:
+                height_pct = st.number_input("高さ(%)", min_value=1.0, max_value=100.0, value=18.0, step=1.0, key=f"{form_key}_rect_height")
         submitted = st.form_submit_button("このページに注釈を追加")
         if submitted:
-            selected_block = text_blocks[selected_block_index - 1] if selected_block_index else None
             effective_text = selected_text.strip() or (selected_block.get("text") if selected_block else "")
             if not effective_text.strip() and not note.strip():
                 st.error("ハイライト文またはメモを入力してください。")
@@ -3826,7 +3872,7 @@ elif menu == "一覧":
                     else:
                         marker_html_parts.append(make_status_pill("DOIなし", "danger"))
                     if missing_metadata_text:
-                        marker_html_parts.append(make_status_pill("メタ不足", "warning"))
+                        marker_html_parts.append(make_status_pill("補完待ち", "warning"))
                     render_compact_paper_card(
                         record,
                         is_selected,
@@ -3943,6 +3989,7 @@ elif menu == "一覧":
                         selected_list_paper,
                         user_id,
                         key_prefix="list_pane_annotations",
+                        page_state_key=f"list_pane_pdf_page_{selected_list_paper['id']}",
                     )
                     render_reading_workflow(
                         selected_list_paper,
