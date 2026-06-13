@@ -1,4 +1,5 @@
 import io
+import json
 import math
 import os
 import re
@@ -62,7 +63,10 @@ PDF_ANNOTATION_TYPES = {
     "highlight": "ハイライト",
     "page_note": "ページメモ",
     "citation_note": "引用予定",
+    "drawing": "手書き注釈",
 }
+MAX_PDF_DRAWING_OBJECTS = 300
+MAX_PDF_DRAWING_JSON_BYTES = 750000
 
 
 def is_missing_relation_error(error):
@@ -1704,6 +1708,56 @@ def normalize_annotation_rect(rect):
     ):
         return {}
     return normalized
+
+
+def normalize_pdf_drawing_data(drawing_data):
+    if not isinstance(drawing_data, dict):
+        return None
+    objects = drawing_data.get("objects")
+    if not isinstance(objects, list) or len(objects) > MAX_PDF_DRAWING_OBJECTS:
+        return None
+    normalized = {
+        "version": str(drawing_data.get("version") or "1"),
+        "canvas_width": max(int(drawing_data.get("canvas_width") or 1), 1),
+        "canvas_height": max(int(drawing_data.get("canvas_height") or 1), 1),
+        "objects": objects,
+    }
+    encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > MAX_PDF_DRAWING_JSON_BYTES:
+        return None
+    return normalized
+
+
+def save_pdf_drawing_annotation(
+    supabase,
+    user_id,
+    paper_id,
+    page_number,
+    drawing_data,
+    annotation_id=None,
+):
+    normalized_drawing = normalize_pdf_drawing_data(drawing_data)
+    if normalized_drawing is None:
+        raise ValueError("描画データが大きすぎるか、形式が正しくありません。")
+    payload = {
+        "user_id": user_id,
+        "paper_id": str(paper_id),
+        "page_number": max(int(page_number or 1), 1),
+        "annotation_type": "drawing",
+        "selected_text": None,
+        "note": None,
+        "color": "#fff6db",
+        "drawing_data": normalized_drawing,
+    }
+    if annotation_id:
+        return (
+            supabase.table("pdf_annotations")
+            .update(payload)
+            .eq("id", annotation_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+    return supabase.table("pdf_annotations").insert(payload).execute()
 
 
 def create_pdf_annotation(

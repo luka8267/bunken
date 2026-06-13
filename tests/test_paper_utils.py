@@ -29,6 +29,7 @@ from paper_utils import (
     make_ris_entry,
     make_word_citation,
     normalize_annotation_rect,
+    normalize_pdf_drawing_data,
     normalize_doi,
     normalize_author_list,
     normalize_journal_title,
@@ -36,6 +37,7 @@ from paper_utils import (
     parse_bibtex_entries,
     parse_ris_entries,
     replace_tags_for_paper,
+    save_pdf_drawing_annotation,
     sort_papers_dataframe,
     strip_metadata_columns,
     update_paper_details,
@@ -186,6 +188,50 @@ class PaperUtilsCollectionTests(unittest.TestCase):
             normalize_annotation_rect({"x": 0.9, "y": 0.2, "width": 0.3, "height": 0.4}),
             {},
         )
+
+    def test_normalize_pdf_drawing_data_accepts_vector_objects(self):
+        drawing = normalize_pdf_drawing_data(
+            {
+                "canvas_width": 720,
+                "canvas_height": 960,
+                "objects": [
+                    {
+                        "type": "marker",
+                        "color": "#f5c542",
+                        "width": 12,
+                        "points": [{"x": 0.1, "y": 0.2}, {"x": 0.4, "y": 0.2}],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(drawing["version"], "1")
+        self.assertEqual(drawing["canvas_width"], 720)
+        self.assertEqual(len(drawing["objects"]), 1)
+
+    def test_normalize_pdf_drawing_data_rejects_invalid_or_excessive_objects(self):
+        self.assertIsNone(normalize_pdf_drawing_data(None))
+        self.assertIsNone(normalize_pdf_drawing_data({"objects": "not-a-list"}))
+        self.assertIsNone(normalize_pdf_drawing_data({"objects": [{}] * 301}))
+
+    def test_save_pdf_drawing_annotation_updates_existing_page_layer(self):
+        supabase = FakeSupabase(
+            {"pdf_annotations": [{"id": "annotation-1", "user_id": "user-1"}]}
+        )
+
+        save_pdf_drawing_annotation(
+            supabase,
+            "user-1",
+            "paper-1",
+            2,
+            {"canvas_width": 720, "canvas_height": 960, "objects": []},
+            annotation_id="annotation-1",
+        )
+
+        update_calls = [call for call in supabase.calls if call[1] == "update"]
+        self.assertEqual(len(update_calls), 1)
+        self.assertEqual(update_calls[0][2]["annotation_type"], "drawing")
+        self.assertEqual(update_calls[0][2]["page_number"], 2)
 
     def test_filter_papers_uses_normalized_attachment_presence(self):
         papers = [

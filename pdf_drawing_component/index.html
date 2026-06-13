@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; font-family: system-ui, sans-serif; color: #17202a; }
+    body { background: transparent; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+    button, input { min-height: 34px; border: 1px solid #d9dee7; border-radius: 6px; background: #fff; color: #17202a; }
+    button { padding: 6px 10px; cursor: pointer; font-weight: 600; }
+    button.active { border-color: #0f766e; background: #e6f4f1; color: #0f766e; }
+    button.primary { margin-left: auto; border-color: #0f766e; background: #0f766e; color: #fff; }
+    button.danger { color: #b42318; }
+    input[type="color"] { width: 42px; padding: 3px; }
+    input[type="range"] { width: 110px; }
+    input[type="text"] { min-width: 170px; padding: 6px 8px; }
+    .canvas-wrap { width: 100%; overflow: auto; border: 1px solid #d9dee7; border-radius: 6px; background: #eef1f5; }
+    canvas { display: block; max-width: none; background: #fff; cursor: crosshair; touch-action: none; }
+    .hint { margin: 7px 0 0; color: #5b6675; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button type="button" data-tool="marker" class="active">&#12510;&#12540;&#12459;&#12540;</button>
+    <button type="button" data-tool="pen">&#12506;&#12531;</button>
+    <button type="button" data-tool="line">&#30452;&#32218;</button>
+    <button type="button" data-tool="rect">&#22235;&#35282;</button>
+    <button type="button" data-tool="text">&#12513;&#12514;</button>
+    <button type="button" data-tool="eraser">&#28040;&#12375;&#12468;&#12512;</button>
+    <input id="color" type="color" value="#f5c542" title="Color">
+    <input id="width" type="range" min="2" max="28" value="12" title="Width">
+    <input id="memo" type="text" placeholder="&#12513;&#12514;&#20869;&#23481;">
+    <button id="undo" type="button">&#20803;&#12395;&#25147;&#12377;</button>
+    <button id="clear" type="button" class="danger">&#20840;&#12390;&#28040;&#12377;</button>
+    <button id="save" type="button" class="primary">&#25551;&#30011;&#12434;&#20445;&#23384;</button>
+  </div>
+  <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
+  <p class="hint"><span id="status">&#12461;&#12515;&#12531;&#12496;&#12473;&#19978;&#12391;&#25551;&#30011;&#12375;&#12289;&#26368;&#24460;&#12395;&#12300;&#25551;&#30011;&#12434;&#20445;&#23384;&#12301;&#12434;&#25276;&#12375;&#12390;&#12367;&#12384;&#12373;&#12356;&#12290;</span></p>
+  <script>
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const colorInput = document.getElementById("color");
+    const widthInput = document.getElementById("width");
+    const memoInput = document.getElementById("memo");
+    let tool = "marker";
+    let objects = [];
+    let draft = null;
+    let backgroundImage = null;
+    let canvasKey = "";
+
+    function post(type, extra = {}) {
+      window.parent.postMessage({ isStreamlitMessage: true, type, ...extra }, "*");
+    }
+    function setHeight() { post("streamlit:setFrameHeight", { height: document.body.scrollHeight }); }
+    function point(event) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
+    }
+    function normalized(p) { return { x: p.x / canvas.width, y: p.y / canvas.height }; }
+    function pixels(p) { return { x: p.x * canvas.width, y: p.y * canvas.height }; }
+    function styleFor(object) {
+      ctx.strokeStyle = object.color || "#f5c542";
+      ctx.fillStyle = object.color || "#f5c542";
+      ctx.lineWidth = Number(object.width || 4);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalAlpha = object.type === "marker" ? 0.32 : 0.95;
+    }
+    function drawObject(object) {
+      styleFor(object);
+      const points = (object.points || []).map(pixels);
+      if ((object.type === "pen" || object.type === "marker") && points.length) {
+        ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+        points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke();
+      } else if (object.type === "line" && points.length > 1) {
+        ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); ctx.lineTo(points[1].x, points[1].y); ctx.stroke();
+      } else if (object.type === "rect" && points.length > 1) {
+        ctx.strokeRect(points[0].x, points[0].y, points[1].x - points[0].x, points[1].y - points[0].y);
+      } else if (object.type === "text" && points.length) {
+        ctx.globalAlpha = 1; ctx.font = `${Math.max(14, Number(object.width || 4) * 2)}px system-ui`;
+        ctx.fillText(object.text || "", points[0].x, points[0].y);
+      }
+      ctx.globalAlpha = 1;
+    }
+    function redraw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (backgroundImage && backgroundImage.complete) ctx.drawImage(backgroundImage, 0, 0, canvas.width, canvas.height);
+      objects.forEach(drawObject);
+      if (draft) drawObject(draft);
+    }
+    function objectDistance(object, p) {
+      const points = (object.points || []).map(pixels);
+      if (!points.length) return Infinity;
+      return Math.min(...points.map(q => Math.hypot(q.x - p.x, q.y - p.y)));
+    }
+    function selectTool(nextTool) {
+      tool = nextTool;
+      document.querySelectorAll("[data-tool]").forEach(button => button.classList.toggle("active", button.dataset.tool === tool));
+      canvas.style.cursor = tool === "eraser" ? "not-allowed" : "crosshair";
+    }
+    document.querySelectorAll("[data-tool]").forEach(button => button.addEventListener("click", () => selectTool(button.dataset.tool)));
+    canvas.addEventListener("pointerdown", event => {
+      const p = point(event);
+      canvas.setPointerCapture(event.pointerId);
+      if (tool === "eraser") {
+        let bestIndex = -1, bestDistance = 36;
+        objects.forEach((object, index) => { const distance = objectDistance(object, p); if (distance < bestDistance) { bestDistance = distance; bestIndex = index; } });
+        if (bestIndex >= 0) objects.splice(bestIndex, 1);
+        redraw(); return;
+      }
+      if (tool === "text") {
+        const textValue = memoInput.value.trim();
+        if (textValue) objects.push({ type: "text", color: colorInput.value, width: Number(widthInput.value), text: textValue, points: [normalized(p)] });
+        redraw(); return;
+      }
+      draft = { type: tool, color: colorInput.value, width: Number(widthInput.value), points: [normalized(p)] };
+    });
+    canvas.addEventListener("pointermove", event => {
+      if (!draft) return;
+      const p = normalized(point(event));
+      if (draft.type === "pen" || draft.type === "marker") draft.points.push(p); else draft.points[1] = p;
+      redraw();
+    });
+    function finishDraft() { if (draft) { objects.push(draft); draft = null; redraw(); } }
+    canvas.addEventListener("pointerup", finishDraft);
+    canvas.addEventListener("pointercancel", finishDraft);
+    document.getElementById("undo").addEventListener("click", () => { objects.pop(); redraw(); });
+    document.getElementById("clear").addEventListener("click", () => { if (window.confirm("Clear all drawings on this page?")) { objects = []; redraw(); } });
+    document.getElementById("save").addEventListener("click", () => {
+      document.getElementById("status").textContent = "Saving...";
+      post("streamlit:setComponentValue", {
+        value: { save_id: `${Date.now()}-${Math.random()}`, drawing: { version: "1", canvas_width: canvas.width, canvas_height: canvas.height, objects } },
+        dataType: "json"
+      });
+    });
+    function render(args) {
+      const nextKey = String(args.canvas_key || "");
+      canvas.width = Math.max(320, Number(args.width || 720));
+      canvas.height = Math.max(240, Number(args.height || 960));
+      if (nextKey !== canvasKey) {
+        canvasKey = nextKey;
+        const initial = args.initial_drawing || {};
+        objects = Array.isArray(initial.objects) ? initial.objects : [];
+      }
+      const source = args.background_data_url || "";
+      if (!source) { backgroundImage = null; redraw(); setHeight(); return; }
+      backgroundImage = new Image();
+      backgroundImage.onload = () => { redraw(); setHeight(); };
+      backgroundImage.src = source;
+    }
+    window.addEventListener("message", event => { if (event.data && event.data.type === "streamlit:render") render(event.data.args || {}); });
+    post("streamlit:componentReady", { apiVersion: 1 });
+    setHeight();
+  </script>
+</body>
+</html>

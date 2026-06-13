@@ -104,6 +104,7 @@ from paper_utils import (
     parse_ris_entries,
     replace_tags_for_paper,
     restore_keeper_from_merge_backup,
+    save_pdf_drawing_annotation,
     save_tags_for_paper,
     save_tags_for_item,
     set_paper_collections,
@@ -115,6 +116,15 @@ from paper_utils import (
     update_paper_files,
     upload_pdf_to_storage,
     upload_supporting_file_to_storage,
+)
+
+PDF_DRAWING_COMPONENT_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "pdf_drawing_component",
+)
+pdf_drawing_canvas = components.declare_component(
+    "pdf_drawing_canvas",
+    path=PDF_DRAWING_COMPONENT_DIR,
 )
 import paper_utils as paper_utils_module
 
@@ -1690,6 +1700,71 @@ def render_annotation_preview_image(page_image, annotations, pending_rect=None):
     return Image.alpha_composite(preview, overlay).convert("RGB")
 
 
+def render_pdf_drawing_editor(
+    paper_id,
+    user_id,
+    page_number,
+    page_image_bytes,
+    current_page_annotations,
+    key_prefix,
+):
+    if not page_image_bytes or Image is None:
+        st.info("PDF上への手書き注釈は、PDFをアプリ内表示したときに利用できます。")
+        return
+
+    drawing_annotation = next(
+        (
+            annotation
+            for annotation in current_page_annotations
+            if annotation.get("annotation_type") == "drawing"
+        ),
+        None,
+    )
+    try:
+        with Image.open(io.BytesIO(page_image_bytes)) as page_image:
+            source_width, source_height = page_image.size
+    except Exception:
+        logger.exception("Failed to inspect PDF page image")
+        st.warning("PDF描画画面を準備できませんでした。")
+        return
+
+    canvas_width = min(max(int(source_width), 560), 900)
+    canvas_height = max(int(canvas_width * source_height / max(source_width, 1)), 320)
+    encoded_png = base64.b64encode(page_image_bytes).decode("ascii")
+    component_key = f"{key_prefix}_pdf_drawing_{paper_id}_{page_number}"
+    result = pdf_drawing_canvas(
+        background_data_url=f"data:image/png;base64,{encoded_png}",
+        initial_drawing=(drawing_annotation or {}).get("drawing_data") or {},
+        width=canvas_width,
+        height=canvas_height,
+        canvas_key=f"{paper_id}:{page_number}",
+        key=component_key,
+        default=None,
+    )
+    if not isinstance(result, dict) or not result.get("save_id"):
+        return
+
+    processed_key = f"{component_key}_processed_save_id"
+    if st.session_state.get(processed_key) == result["save_id"]:
+        return
+    st.session_state[processed_key] = result["save_id"]
+    try:
+        save_pdf_drawing_annotation(
+            supabase,
+            user_id,
+            paper_id,
+            page_number,
+            result.get("drawing"),
+            annotation_id=(drawing_annotation or {}).get("id"),
+        )
+        clear_library_caches()
+        st.session_state["post_action_success"] = "PDF上の描画を保存しました。"
+        st.rerun()
+    except Exception:
+        logger.exception("Failed to save PDF drawing annotation")
+        st.error("PDF上の描画を保存できませんでした。時間をおいてもう一度お試しください。")
+
+
 def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper", page_state_key=None, page_image_bytes=None, pdf_bytes=None):
     paper_id = str(paper.get("id"))
     try:
@@ -1708,7 +1783,11 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
     st.caption(
         f"このページ: {len(current_page_annotations)}件 / このPDF全体: {len(annotations)}件"
     )
-    type_labels = {value: key for key, value in PDF_ANNOTATION_TYPES.items()}
+    type_labels = {
+        value: key
+        for key, value in PDF_ANNOTATION_TYPES.items()
+        if value != "drawing"
+    }
     form_key = f"{key_prefix}_pdf_annotation_form_{paper_id}_{page_number}"
     text_blocks = []
     if pdf_bytes:
@@ -1717,17 +1796,16 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
         except Exception:
             logger.exception("Failed to extract PDF text blocks")
             text_blocks = []
-    if page_image_bytes and Image:
-        try:
-            page_image = Image.open(io.BytesIO(page_image_bytes))
-        except Exception:
-            page_image = None
-        if page_image:
-            st.caption("保存済みの位置つき注釈は、下のPDFプレビューにハイライト表示されます。")
-            preview_image = render_annotation_preview_image(page_image, current_page_annotations)
-            st.image(preview_image, use_container_width=True)
-    elif page_image_bytes:
-        st.caption("PDFプレビュー用ライブラリを読み込めないため、通常の注釈として保存します。")
+    st.caption("PDF上へ直接、マーカー、ペン、図形、文字メモを書き込めます。描画中はページ全体の再読み込みは発生しません。")
+    render_pdf_drawing_editor(
+        paper_id,
+        user_id,
+        page_number,
+        page_image_bytes,
+        current_page_annotations,
+        key_prefix,
+    )
+    st.markdown("##### 文章・引用メモを追加（補助）")
     block_keyword = ""
     filtered_text_blocks = text_blocks
     if text_blocks:
@@ -1881,6 +1959,38 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
                     f"p.{annotation.get('page_number')} / {label} / {annotation.get('updated_at') or annotation.get('created_at') or ''}",
                     expanded=False,
                 ):
+                    if annotation.get("annotation_type") == "drawing":
+                        object_count = len(
+                            ((annotation.get("drawing_data") or {}).get("objects") or [])
+                        )
+                        st.caption(f"PDF上の描画レイヤーです。描画要素: {object_count}件")
+                        drawing_action_col1, drawing_action_col2 = st.columns(2)
+                        with drawing_action_col1:
+                            if st.button(
+                                "描画を削除",
+                                key=f"{key_prefix}_drawing_delete_{annotation_id}",
+                                use_container_width=True,
+                            ):
+                                try:
+                                    delete_pdf_annotation(supabase, user_id, annotation_id)
+                                    clear_library_caches()
+                                    st.session_state["post_action_success"] = "PDF上の描画を削除しました。"
+                                    st.rerun()
+                                except Exception:
+                                    logger.exception("Failed to delete PDF drawing annotation")
+                                    st.error("PDF上の描画を削除できませんでした。")
+                        with drawing_action_col2:
+                            if st.button(
+                                "ページへ",
+                                key=f"{key_prefix}_drawing_jump_{annotation_id}",
+                                disabled=not page_state_key,
+                                use_container_width=True,
+                            ):
+                                st.session_state[page_state_key] = int(
+                                    annotation.get("page_number") or 1
+                                )
+                                st.rerun()
+                        continue
                     edit_type_label = st.selectbox(
                         "種類",
                         list(type_labels.keys()),
@@ -2045,19 +2155,20 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
             else:
                 if rendered_page != st.session_state[page_key]:
                     st.session_state[page_key] = rendered_page
-                encoded_png = base64.b64encode(png_bytes).decode("ascii")
-                components.html(
-                    f"""
-                    <div style="width:100%; height:{st.session_state[height_key]}px; overflow:auto; border:1px solid #d0d7de; border-radius:8px; background:#f8fafc;">
-                      <img
-                        src="data:image/png;base64,{encoded_png}"
-                        alt="PDF page {rendered_page}"
-                        style="display:block; max-width:none; width:100%; height:auto; margin:0 auto;"
-                      />
-                    </div>
-                    """,
-                    height=int(st.session_state[height_key]) + 20,
-                )
+                if not user_id:
+                    encoded_png = base64.b64encode(png_bytes).decode("ascii")
+                    components.html(
+                        f"""
+                        <div style="width:100%; height:{st.session_state[height_key]}px; overflow:auto; border:1px solid #d0d7de; border-radius:8px; background:#f8fafc;">
+                          <img
+                            src="data:image/png;base64,{encoded_png}"
+                            alt="PDF page {rendered_page}"
+                            style="display:block; max-width:none; width:100%; height:auto; margin:0 auto;"
+                          />
+                        </div>
+                        """,
+                        height=int(st.session_state[height_key]) + 20,
+                    )
                 st.caption(
                     f"ページ {rendered_page} / {page_count}。Brave対策としてPDFを画像化して表示しています。"
                 )
