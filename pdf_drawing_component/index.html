@@ -16,35 +16,32 @@
     input[type="color"] { width: 42px; padding: 3px; }
     input[type="range"] { width: 110px; }
     textarea { min-width: 210px; height: 58px; padding: 7px 8px; resize: vertical; font: inherit; }
-    .workspace { display: grid; grid-template-columns: minmax(360px, 1fr) 250px; align-items: start; gap: 10px; width: 100%; }
+    [hidden] { display: none !important; }
+    .workspace { display: block; width: 100%; }
     .canvas-wrap { min-width: 0; overflow: hidden; border: 1px solid #d9dee7; border-radius: 6px; background: #eef1f5; }
-    canvas { display: block; width: 100%; height: auto; background: #fff; cursor: crosshair; touch-action: none; }
-    .comments { position: sticky; top: 0; min-width: 0; max-height: 760px; overflow-y: auto; padding-right: 3px; }
+    canvas { display: block; width: 100%; height: auto; background: #fff; cursor: default; touch-action: none; }
+    .comments { min-width: 0; margin-top: 10px; }
     .comments-title { margin: 0 0 8px; font-size: 14px; }
+    .comment-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
     .empty-comments { padding: 14px; border: 1px dashed #c8d0dc; border-radius: 6px; color: #5b6675; font-size: 13px; }
-    .comment-card { margin-bottom: 8px; padding: 9px; border: 1px solid #d9dee7; border-left: 4px solid #0f766e; border-radius: 6px; background: #fff; cursor: pointer; }
+    .comment-card { padding: 9px; border: 1px solid #d9dee7; border-left: 4px solid #0f766e; border-radius: 6px; background: #fff; cursor: pointer; }
     .comment-card.selected { border-color: #0f766e; background: #f0fdfa; }
     .comment-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 12px; font-weight: 700; }
     .comment-card textarea { width: 100%; min-width: 0; height: 82px; }
     .comment-delete { min-height: 26px; padding: 2px 7px; color: #b42318; }
     .hint { margin: 7px 0 0; color: #5b6675; font-size: 12px; }
-    @media (max-width: 700px) {
-      .workspace { display: block; }
-      .comments { position: static; max-height: none !important; margin-top: 10px; }
-    }
   </style>
 </head>
 <body>
   <div class="toolbar">
-    <button type="button" data-tool="marker" class="active">&#12510;&#12540;&#12459;&#12540;</button>
+    <button type="button" data-tool="select" class="active">&#25805;&#20316;&#12394;&#12375;</button>
+    <button type="button" data-tool="marker">&#12510;&#12540;&#12459;&#12540;</button>
     <button type="button" data-tool="pen">&#12506;&#12531;</button>
-    <button type="button" data-tool="line">&#30452;&#32218;</button>
-    <button type="button" data-tool="rect">&#22235;&#35282;</button>
     <button type="button" data-tool="comment">&#12467;&#12513;&#12531;&#12488;</button>
     <button type="button" data-tool="eraser">&#28040;&#12375;&#12468;&#12512;</button>
     <input id="color" type="color" value="#f5c542" title="Color">
     <input id="width" type="range" min="2" max="28" value="12" title="Width">
-    <textarea id="memo" placeholder="&#12467;&#12513;&#12531;&#12488;&#12434;&#20837;&#21147;&#12375;&#12289;PDF&#19978;&#12398;&#25991;&#31456;&#12434;&#12489;&#12521;&#12483;&#12464;"></textarea>
+    <textarea id="memo" hidden placeholder="&#12467;&#12513;&#12531;&#12488;&#12434;&#20837;&#21147;&#12375;&#12289;PDF&#19978;&#12398;&#25991;&#31456;&#12434;&#12489;&#12521;&#12483;&#12464;"></textarea>
     <button id="undo" type="button">&#20803;&#12395;&#25147;&#12377;</button>
     <button id="clear" type="button" class="danger">&#20840;&#12390;&#28040;&#12377;</button>
     <button id="save" type="button" class="primary">&#27880;&#37320;&#12434;&#20445;&#23384;</button>
@@ -53,10 +50,10 @@
     <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
     <aside class="comments">
       <h3 class="comments-title">&#12467;&#12513;&#12531;&#12488;</h3>
-      <div id="comment-list"></div>
+      <div id="comment-list" class="comment-list"></div>
     </aside>
   </div>
-  <p class="hint"><span id="status">&#25551;&#30011;&#12420;&#12467;&#12513;&#12531;&#12488;&#12434;&#36861;&#21152;&#12375;&#12289;&#26368;&#24460;&#12395;&#12300;&#27880;&#37320;&#12434;&#20445;&#23384;&#12301;&#12434;&#25276;&#12375;&#12390;&#12367;&#12384;&#12373;&#12356;&#12290;</span></p>
+  <p class="hint"><span id="status">&#12300;&#25805;&#20316;&#12394;&#12375;&#12301;&#12391;&#12399;PDF&#12434;&#12463;&#12522;&#12483;&#12463;&#12375;&#12390;&#12418;&#27880;&#37320;&#12399;&#36861;&#21152;&#12373;&#12428;&#12414;&#12379;&#12435;&#12290;</span></p>
   <script>
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
@@ -64,7 +61,7 @@
     const widthInput = document.getElementById("width");
     const memoInput = document.getElementById("memo");
     const commentList = document.getElementById("comment-list");
-    let tool = "marker";
+    let tool = "select";
     let objects = [];
     let draft = null;
     let backgroundImage = null;
@@ -197,7 +194,12 @@
     function selectTool(nextTool) {
       tool = nextTool;
       document.querySelectorAll("[data-tool]").forEach(button => button.classList.toggle("active", button.dataset.tool === tool));
-      canvas.style.cursor = tool === "eraser" ? "not-allowed" : "crosshair";
+      memoInput.hidden = tool !== "comment";
+      canvas.style.cursor = tool === "select" ? "default" : (tool === "eraser" ? "not-allowed" : "crosshair");
+      document.getElementById("status").textContent = tool === "select"
+        ? "操作なし: PDFをクリックしても注釈は追加されません。"
+        : "注釈を追加したら、最後に「注釈を保存」を押してください。";
+      setHeight();
     }
     document.querySelectorAll("[data-tool]").forEach(button => button.addEventListener("click", () => selectTool(button.dataset.tool)));
     canvas.addEventListener("pointerdown", event => {
@@ -206,6 +208,11 @@
       const clickedCommentIndex = nearestCommentIndex(p);
       if (clickedCommentIndex >= 0 && tool !== "eraser") {
         selectComment(clickedCommentIndex);
+        return;
+      }
+      if (tool === "select") {
+        selectedCommentIndex = -1;
+        redraw();
         return;
       }
       if (tool === "eraser") {
@@ -252,7 +259,7 @@
     document.getElementById("undo").addEventListener("click", () => { objects.pop(); selectedCommentIndex = -1; redraw(); });
     document.getElementById("clear").addEventListener("click", () => { if (window.confirm("このページの注釈を全て消しますか？")) { objects = []; selectedCommentIndex = -1; redraw(); } });
     document.getElementById("save").addEventListener("click", () => {
-      document.getElementById("status").textContent = "Saving...";
+      document.getElementById("status").textContent = "保存しています...";
       post("streamlit:setComponentValue", {
         value: { save_id: `${Date.now()}-${Math.random()}`, drawing: { version: "1", canvas_width: canvas.width, canvas_height: canvas.height, objects } },
         dataType: "json"
@@ -273,10 +280,7 @@
       backgroundImage = new Image();
       backgroundImage.onload = () => {
         redraw();
-        requestAnimationFrame(() => {
-          document.querySelector(".comments").style.maxHeight = `${canvas.getBoundingClientRect().height}px`;
-          setHeight();
-        });
+        requestAnimationFrame(setHeight);
       };
       backgroundImage.src = source;
     }

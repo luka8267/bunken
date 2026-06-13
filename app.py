@@ -56,7 +56,6 @@ from paper_utils import (
     build_document_citation_export_rows,
     build_pdf_download_zip,
     create_collection,
-    create_pdf_annotation,
     create_user_paper,
     create_pdf_signed_url,
     delete_collection,
@@ -1587,83 +1586,6 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     return page_count, safe_page_number, pixmap.tobytes("png")
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def extract_pdf_page_text_blocks(pdf_bytes, page_number):
-    if fitz is None:
-        return []
-    document = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page_count = document.page_count
-    safe_page_number = min(max(int(page_number or 1), 1), max(page_count, 1))
-    page = document.load_page(safe_page_number - 1)
-    page_width = max(float(page.rect.width), 1.0)
-    page_height = max(float(page.rect.height), 1.0)
-    blocks = []
-    for block in page.get_text("blocks") or []:
-        if len(block) >= 7 and block[6] != 0:
-            continue
-        try:
-            x0, y0, x1, y1 = (float(block[0]), float(block[1]), float(block[2]), float(block[3]))
-        except (TypeError, ValueError, IndexError):
-            continue
-        text = re.sub(r"\s+", " ", str(block[4] if len(block) > 4 else "")).strip()
-        if len(text) < 12:
-            continue
-        x = max(0.0, min(x0 / page_width, 1.0))
-        y = max(0.0, min(y0 / page_height, 1.0))
-        width = max(0.01, min((x1 - x0) / page_width, 1.0 - x))
-        height = max(0.01, min((y1 - y0) / page_height, 1.0 - y))
-        blocks.append(
-            {
-                "text": text,
-                "rect": {"x": x, "y": y, "width": width, "height": height},
-                "label": text[:120] + ("..." if len(text) > 120 else ""),
-            }
-        )
-    blocks.sort(key=lambda item: (item["rect"]["y"], item["rect"]["x"]))
-    return blocks[:80]
-
-
-def filter_pdf_text_blocks(blocks, keyword):
-    query = (keyword or "").strip().lower()
-    if not query:
-        return blocks
-    terms = [term for term in re.split(r"\s+", query) if term]
-    return [
-        block
-        for block in blocks
-        if all(term in block.get("text", "").lower() for term in terms)
-    ]
-
-
-def pdf_block_option_label(block, index):
-    rect = block.get("rect") or {}
-    y_pct = int(round(float(rect.get("y") or 0) * 100))
-    preview = block.get("label") or block.get("text") or ""
-    return f"{index}. p.{y_pct}%  {preview}"
-
-
-def annotation_rect_from_position(position_mode, x_pct, y_pct, width_pct, height_pct):
-    presets = {
-        "ページ上部": {"x": 0.08, "y": 0.08, "width": 0.84, "height": 0.18},
-        "ページ中央": {"x": 0.08, "y": 0.38, "width": 0.84, "height": 0.24},
-        "ページ下部": {"x": 0.08, "y": 0.72, "width": 0.84, "height": 0.18},
-        "左側": {"x": 0.06, "y": 0.08, "width": 0.42, "height": 0.84},
-        "右側": {"x": 0.52, "y": 0.08, "width": 0.42, "height": 0.84},
-    }
-    if position_mode == "位置なし":
-        return None
-    if position_mode in presets:
-        return presets[position_mode]
-    try:
-        x = max(0.0, min(float(x_pct) / 100.0, 1.0))
-        y = max(0.0, min(float(y_pct) / 100.0, 1.0))
-        rect_width = max(0.01, min(float(width_pct) / 100.0, 1.0 - x))
-        rect_height = max(0.01, min(float(height_pct) / 100.0, 1.0 - y))
-    except (TypeError, ValueError):
-        return None
-    return {"x": x, "y": y, "width": rect_width, "height": rect_height}
-
-
 def render_annotation_preview_image(page_image, annotations, pending_rect=None):
     if ImageDraw is None:
         return page_image
@@ -1728,7 +1650,7 @@ def render_pdf_drawing_editor(
         st.warning("PDF描画画面を準備できませんでした。")
         return
 
-    canvas_width = min(max(int(source_width), 560), 900)
+    canvas_width = min(max(int(source_width), 720), 1200)
     canvas_height = max(int(canvas_width * source_height / max(source_width, 1)), 320)
     encoded_png = base64.b64encode(page_image_bytes).decode("ascii")
     component_key = f"{key_prefix}_pdf_drawing_{paper_id}_{page_number}"
@@ -1765,7 +1687,53 @@ def render_pdf_drawing_editor(
         st.error("PDF上の描画を保存できませんでした。時間をおいてもう一度お試しください。")
 
 
-def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper", page_state_key=None, page_image_bytes=None, pdf_bytes=None):
+def render_pdf_page_navigation(page_state_key, page_number, page_count, key_prefix, paper_id):
+    if not page_state_key or not page_count:
+        return
+
+    def set_page(next_page):
+        st.session_state[page_state_key] = next_page
+
+    previous_col, page_col, next_col = st.columns([1, 2, 1])
+    with previous_col:
+        st.button(
+            "前のページ",
+            key=f"{key_prefix}_pdf_previous_{paper_id}_{page_number}",
+            disabled=page_number <= 1,
+            use_container_width=True,
+            on_click=set_page,
+            args=(page_number - 1,),
+        )
+    with page_col:
+        st.number_input(
+            "PDFページ",
+            min_value=1,
+            max_value=int(page_count),
+            step=1,
+            key=page_state_key,
+            label_visibility="collapsed",
+        )
+        st.caption(f"ページ {page_number} / {page_count}")
+    with next_col:
+        st.button(
+            "次のページ",
+            key=f"{key_prefix}_pdf_next_{paper_id}_{page_number}",
+            disabled=page_number >= page_count,
+            use_container_width=True,
+            on_click=set_page,
+            args=(page_number + 1,),
+        )
+
+
+def render_paper_pdf_annotations(
+    paper,
+    user_id,
+    page_number,
+    key_prefix="paper",
+    page_state_key=None,
+    page_image_bytes=None,
+    page_count=None,
+):
     paper_id = str(paper.get("id"))
     try:
         annotations = fetch_pdf_annotations(supabase, user_id, paper_id)
@@ -1788,15 +1756,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
         for key, value in PDF_ANNOTATION_TYPES.items()
         if value != "drawing"
     }
-    form_key = f"{key_prefix}_pdf_annotation_form_{paper_id}_{page_number}"
-    text_blocks = []
-    if pdf_bytes:
-        try:
-            text_blocks = extract_pdf_page_text_blocks(pdf_bytes, page_number)
-        except Exception:
-            logger.exception("Failed to extract PDF text blocks")
-            text_blocks = []
-    st.caption("PDF上へマーカー、ペン、図形を書き込めます。コメントは文章をドラッグして引いたマーカーに紐づき、右側のコメント欄へ表示されます。")
+    st.caption("「操作なし」ではPDFをクリックしても変更されません。マーカー、ペン、コメントを使った後は注釈を保存してください。")
     render_pdf_drawing_editor(
         paper_id,
         user_id,
@@ -1805,114 +1765,13 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
         current_page_annotations,
         key_prefix,
     )
-    st.markdown("##### 文章・引用メモを追加（補助）")
-    block_keyword = ""
-    filtered_text_blocks = text_blocks
-    if text_blocks:
-        block_keyword = st.text_input(
-            "本文候補を検索",
-            key=f"{form_key}_text_block_search",
-            placeholder="キーワードで本文候補を絞り込み",
-        )
-        filtered_text_blocks = filter_pdf_text_blocks(text_blocks, block_keyword)
-        st.caption(f"本文候補: {len(filtered_text_blocks)}件 / {len(text_blocks)}件")
-    with st.form(form_key):
-        annotation_type_label = st.selectbox(
-            "種類",
-            list(type_labels.keys()),
-            index=1,
-            key=f"{form_key}_type",
-        )
-        filtered_block_indexes = [
-            index
-            for index, block in enumerate(text_blocks)
-            if block in filtered_text_blocks
-        ]
-        block_options = [-1] + filtered_block_indexes
-        selected_block_index = st.selectbox(
-            "PDF本文から選択",
-            block_options,
-            format_func=lambda index: "選択しない" if index < 0 else pdf_block_option_label(text_blocks[index], index + 1),
-            key=f"{form_key}_text_block",
-            help="選ぶと、その本文とPDF上の位置をまとめて保存します。",
-        )
-        if not text_blocks:
-            st.caption("このページから本文ブロックを抽出できませんでした。手入力で注釈を追加できます。")
-        selected_block = text_blocks[selected_block_index] if selected_block_index >= 0 else None
-        if selected_block:
-            st.info(selected_block["text"])
-            st.caption("この本文は保存時に「ハイライトした文」として自動で保存されます。")
-        selected_text = st.text_area(
-            "ハイライトした文・引用したい文（任意で上書き）",
-            height=90,
-            key=f"{form_key}_selected_text",
-            placeholder="PDF本文から選んだ場合は空欄でも保存できます。",
-        )
-        note = st.text_area(
-            "メモ",
-            height=100,
-            key=f"{form_key}_note",
-        )
-        color = st.selectbox(
-            "色",
-            ["#fff6db", "#e6f4f1", "#eaf1ff", "#fee7e7"],
-            format_func={
-                "#fff6db": "黄",
-                "#e6f4f1": "緑",
-                "#eaf1ff": "青",
-                "#fee7e7": "赤",
-            }.get,
-            key=f"{form_key}_color",
-        )
-        position_mode = st.selectbox(
-            "ハイライト位置",
-            ["PDF本文の位置", "位置なし", "ページ上部", "ページ中央", "ページ下部", "左側", "右側", "手動入力"],
-            key=f"{form_key}_position_mode",
-        )
-        st.caption("PDF本文から選んだ場合は「PDF本文の位置」のままで保存できます。")
-        with st.expander("手動で位置を調整"):
-            rect_cols = st.columns(4)
-            with rect_cols[0]:
-                x_pct = st.number_input("左(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_x")
-            with rect_cols[1]:
-                y_pct = st.number_input("上(%)", min_value=0.0, max_value=99.0, value=8.0, step=1.0, key=f"{form_key}_rect_y")
-            with rect_cols[2]:
-                width_pct = st.number_input("幅(%)", min_value=1.0, max_value=100.0, value=84.0, step=1.0, key=f"{form_key}_rect_width")
-            with rect_cols[3]:
-                height_pct = st.number_input("高さ(%)", min_value=1.0, max_value=100.0, value=18.0, step=1.0, key=f"{form_key}_rect_height")
-        submitted = st.form_submit_button("注釈を保存")
-        if submitted:
-            effective_text = selected_text.strip() or (selected_block.get("text") if selected_block else "")
-            if not effective_text.strip() and not note.strip():
-                st.error("ハイライト文またはメモを入力してください。")
-            else:
-                if position_mode == "PDF本文の位置":
-                    annotation_rect = selected_block.get("rect") if selected_block else None
-                else:
-                    annotation_rect = annotation_rect_from_position(
-                        position_mode,
-                        x_pct,
-                        y_pct,
-                        width_pct,
-                        height_pct,
-                    )
-                try:
-                    create_pdf_annotation(
-                        supabase,
-                        user_id,
-                        paper_id,
-                        page_number,
-                        type_labels[annotation_type_label],
-                        effective_text,
-                        note,
-                        color,
-                        rect=annotation_rect,
-                    )
-                    st.success("PDF注釈を保存しました。")
-                    st.rerun()
-                except Exception:
-                    logger.exception("Failed to create PDF annotation")
-                    st.error("PDF注釈を保存できませんでした。時間をおいてもう一度お試しください。")
+    render_pdf_page_navigation(
+        page_state_key,
+        int(page_number or 1),
+        page_count,
+        key_prefix,
+        paper_id,
+    )
 
     if not annotations:
         st.info("このPDFにはまだ注釈がありません。")
@@ -2100,14 +1959,12 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
     if height_key not in st.session_state:
         st.session_state[height_key] = 760
 
-    control_col1, control_col2, control_col3, control_col4 = st.columns([1, 1, 1, 1.2])
+    control_col1, control_col2, control_col3 = st.columns([1, 1, 1.2])
     with control_col1:
-        st.number_input("ページ", min_value=1, step=1, key=page_key)
-    with control_col2:
         st.slider("拡大率", 60, 200, key=zoom_key)
-    with control_col3:
+    with control_col2:
         st.slider("高さ", 420, 1100, key=height_key)
-    with control_col4:
+    with control_col3:
         show_embed = st.toggle("アプリ内表示", value=True, key=show_key)
 
     pdf_bytes = None
@@ -2180,7 +2037,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                         key_prefix=key_prefix,
                         page_state_key=page_key,
                         page_image_bytes=png_bytes,
-                        pdf_bytes=pdf_bytes,
+                        page_count=page_count,
                     )
                     annotations_rendered = True
     if user_id and not annotations_rendered:
