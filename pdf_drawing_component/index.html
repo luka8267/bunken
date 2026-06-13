@@ -8,17 +8,30 @@
     html, body { margin: 0; font-family: system-ui, sans-serif; color: #17202a; }
     body { background: transparent; }
     .toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
-    button, input { min-height: 34px; border: 1px solid #d9dee7; border-radius: 6px; background: #fff; color: #17202a; }
+    button, input, textarea { min-height: 34px; border: 1px solid #d9dee7; border-radius: 6px; background: #fff; color: #17202a; }
     button { padding: 6px 10px; cursor: pointer; font-weight: 600; }
     button.active { border-color: #0f766e; background: #e6f4f1; color: #0f766e; }
     button.primary { margin-left: auto; border-color: #0f766e; background: #0f766e; color: #fff; }
     button.danger { color: #b42318; }
     input[type="color"] { width: 42px; padding: 3px; }
     input[type="range"] { width: 110px; }
-    input[type="text"] { min-width: 170px; padding: 6px 8px; }
-    .canvas-wrap { width: 100%; overflow: auto; border: 1px solid #d9dee7; border-radius: 6px; background: #eef1f5; }
+    textarea { min-width: 210px; height: 58px; padding: 7px 8px; resize: vertical; font: inherit; }
+    .workspace { display: flex; align-items: flex-start; gap: 10px; width: 100%; overflow-x: auto; }
+    .canvas-wrap { flex: 0 0 auto; overflow: hidden; border: 1px solid #d9dee7; border-radius: 6px; background: #eef1f5; }
     canvas { display: block; max-width: none; background: #fff; cursor: crosshair; touch-action: none; }
+    .comments { position: sticky; top: 0; flex: 0 0 260px; max-height: 960px; overflow-y: auto; padding-right: 3px; }
+    .comments-title { margin: 0 0 8px; font-size: 14px; }
+    .empty-comments { padding: 14px; border: 1px dashed #c8d0dc; border-radius: 6px; color: #5b6675; font-size: 13px; }
+    .comment-card { margin-bottom: 8px; padding: 9px; border: 1px solid #d9dee7; border-left: 4px solid #0f766e; border-radius: 6px; background: #fff; cursor: pointer; }
+    .comment-card.selected { border-color: #0f766e; background: #f0fdfa; }
+    .comment-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 12px; font-weight: 700; }
+    .comment-card textarea { width: 100%; min-width: 0; height: 82px; }
+    .comment-delete { min-height: 26px; padding: 2px 7px; color: #b42318; }
     .hint { margin: 7px 0 0; color: #5b6675; font-size: 12px; }
+    @media (max-width: 880px) {
+      .workspace { display: block; }
+      .comments { position: static; max-height: none; margin-top: 10px; }
+    }
   </style>
 </head>
 <body>
@@ -27,28 +40,36 @@
     <button type="button" data-tool="pen">&#12506;&#12531;</button>
     <button type="button" data-tool="line">&#30452;&#32218;</button>
     <button type="button" data-tool="rect">&#22235;&#35282;</button>
-    <button type="button" data-tool="text">&#12513;&#12514;</button>
+    <button type="button" data-tool="comment">&#12467;&#12513;&#12531;&#12488;</button>
     <button type="button" data-tool="eraser">&#28040;&#12375;&#12468;&#12512;</button>
     <input id="color" type="color" value="#f5c542" title="Color">
     <input id="width" type="range" min="2" max="28" value="12" title="Width">
-    <input id="memo" type="text" placeholder="&#12513;&#12514;&#20869;&#23481;">
+    <textarea id="memo" placeholder="&#12467;&#12513;&#12531;&#12488;&#12434;&#20837;&#21147;&#12375;&#12289;PDF&#19978;&#12398;&#22580;&#25152;&#12434;&#12463;&#12522;&#12483;&#12463;"></textarea>
     <button id="undo" type="button">&#20803;&#12395;&#25147;&#12377;</button>
     <button id="clear" type="button" class="danger">&#20840;&#12390;&#28040;&#12377;</button>
-    <button id="save" type="button" class="primary">&#25551;&#30011;&#12434;&#20445;&#23384;</button>
+    <button id="save" type="button" class="primary">&#27880;&#37320;&#12434;&#20445;&#23384;</button>
   </div>
-  <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
-  <p class="hint"><span id="status">&#12461;&#12515;&#12531;&#12496;&#12473;&#19978;&#12391;&#25551;&#30011;&#12375;&#12289;&#26368;&#24460;&#12395;&#12300;&#25551;&#30011;&#12434;&#20445;&#23384;&#12301;&#12434;&#25276;&#12375;&#12390;&#12367;&#12384;&#12373;&#12356;&#12290;</span></p>
+  <div class="workspace">
+    <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
+    <aside class="comments">
+      <h3 class="comments-title">&#12467;&#12513;&#12531;&#12488;</h3>
+      <div id="comment-list"></div>
+    </aside>
+  </div>
+  <p class="hint"><span id="status">&#25551;&#30011;&#12420;&#12467;&#12513;&#12531;&#12488;&#12434;&#36861;&#21152;&#12375;&#12289;&#26368;&#24460;&#12395;&#12300;&#27880;&#37320;&#12434;&#20445;&#23384;&#12301;&#12434;&#25276;&#12375;&#12390;&#12367;&#12384;&#12373;&#12356;&#12290;</span></p>
   <script>
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     const colorInput = document.getElementById("color");
     const widthInput = document.getElementById("width");
     const memoInput = document.getElementById("memo");
+    const commentList = document.getElementById("comment-list");
     let tool = "marker";
     let objects = [];
     let draft = null;
     let backgroundImage = null;
     let canvasKey = "";
+    let selectedCommentIndex = -1;
 
     function post(type, extra = {}) {
       window.parent.postMessage({ isStreamlitMessage: true, type, ...extra }, "*");
@@ -78,9 +99,24 @@
         ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); ctx.lineTo(points[1].x, points[1].y); ctx.stroke();
       } else if (object.type === "rect" && points.length > 1) {
         ctx.strokeRect(points[0].x, points[0].y, points[1].x - points[0].x, points[1].y - points[0].y);
-      } else if (object.type === "text" && points.length) {
-        ctx.globalAlpha = 1; ctx.font = `${Math.max(14, Number(object.width || 4) * 2)}px system-ui`;
-        ctx.fillText(object.text || "", points[0].x, points[0].y);
+      } else if ((object.type === "comment" || object.type === "text") && points.length) {
+        const commentNumber = commentObjects().findIndex(item => item.object === object) + 1;
+        const selected = objects.indexOf(object) === selectedCommentIndex;
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(points[0].x, points[0].y, selected ? 16 : 13, 0, Math.PI * 2);
+        ctx.fillStyle = selected ? "#0f766e" : "#ffffff";
+        ctx.fill();
+        ctx.lineWidth = selected ? 4 : 3;
+        ctx.strokeStyle = "#0f766e";
+        ctx.stroke();
+        ctx.fillStyle = selected ? "#ffffff" : "#0f766e";
+        ctx.font = "700 12px system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(commentNumber), points[0].x, points[0].y);
+        ctx.textAlign = "start";
+        ctx.textBaseline = "alphabetic";
       }
       ctx.globalAlpha = 1;
     }
@@ -89,11 +125,70 @@
       if (backgroundImage && backgroundImage.complete) ctx.drawImage(backgroundImage, 0, 0, canvas.width, canvas.height);
       objects.forEach(drawObject);
       if (draft) drawObject(draft);
+      renderComments();
+    }
+    function commentObjects() {
+      return objects
+        .map((object, index) => ({ object, index }))
+        .filter(item => item.object.type === "comment" || item.object.type === "text");
+    }
+    function selectComment(index) {
+      selectedCommentIndex = index;
+      redraw();
+    }
+    function renderComments() {
+      const comments = commentObjects();
+      commentList.replaceChildren();
+      if (!comments.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-comments";
+        empty.textContent = "PDF上の場所にコメントを追加すると、ここに表示されます。";
+        commentList.appendChild(empty);
+        return;
+      }
+      comments.forEach((item, commentIndex) => {
+        const card = document.createElement("div");
+        card.className = `comment-card${item.index === selectedCommentIndex ? " selected" : ""}`;
+        card.addEventListener("click", () => selectComment(item.index));
+        const head = document.createElement("div");
+        head.className = "comment-head";
+        const title = document.createElement("span");
+        title.textContent = `コメント ${commentIndex + 1}`;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "comment-delete";
+        remove.textContent = "削除";
+        remove.addEventListener("click", event => {
+          event.stopPropagation();
+          objects.splice(item.index, 1);
+          selectedCommentIndex = -1;
+          redraw();
+        });
+        const editor = document.createElement("textarea");
+        editor.value = item.object.text || "";
+        editor.addEventListener("click", event => event.stopPropagation());
+        editor.addEventListener("input", event => { item.object.text = event.target.value; });
+        head.append(title, remove);
+        card.append(head, editor);
+        commentList.appendChild(card);
+      });
     }
     function objectDistance(object, p) {
       const points = (object.points || []).map(pixels);
       if (!points.length) return Infinity;
       return Math.min(...points.map(q => Math.hypot(q.x - p.x, q.y - p.y)));
+    }
+    function nearestCommentIndex(p) {
+      let bestIndex = -1;
+      let bestDistance = 22;
+      commentObjects().forEach(item => {
+        const distance = objectDistance(item.object, p);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = item.index;
+        }
+      });
+      return bestIndex;
     }
     function selectTool(nextTool) {
       tool = nextTool;
@@ -104,15 +199,27 @@
     canvas.addEventListener("pointerdown", event => {
       const p = point(event);
       canvas.setPointerCapture(event.pointerId);
+      const clickedCommentIndex = nearestCommentIndex(p);
+      if (clickedCommentIndex >= 0 && tool !== "eraser") {
+        selectComment(clickedCommentIndex);
+        return;
+      }
       if (tool === "eraser") {
         let bestIndex = -1, bestDistance = 36;
         objects.forEach((object, index) => { const distance = objectDistance(object, p); if (distance < bestDistance) { bestDistance = distance; bestIndex = index; } });
         if (bestIndex >= 0) objects.splice(bestIndex, 1);
         redraw(); return;
       }
-      if (tool === "text") {
+      if (tool === "comment") {
         const textValue = memoInput.value.trim();
-        if (textValue) objects.push({ type: "text", color: colorInput.value, width: Number(widthInput.value), text: textValue, points: [normalized(p)] });
+        if (!textValue) {
+          document.getElementById("status").textContent = "先にコメント内容を入力してください。";
+          return;
+        }
+        objects.push({ type: "comment", color: "#0f766e", width: 4, text: textValue, points: [normalized(p)] });
+        selectedCommentIndex = objects.length - 1;
+        memoInput.value = "";
+        document.getElementById("status").textContent = "コメントを追加しました。保存すると反映されます。";
         redraw(); return;
       }
       draft = { type: tool, color: colorInput.value, width: Number(widthInput.value), points: [normalized(p)] };
@@ -126,8 +233,8 @@
     function finishDraft() { if (draft) { objects.push(draft); draft = null; redraw(); } }
     canvas.addEventListener("pointerup", finishDraft);
     canvas.addEventListener("pointercancel", finishDraft);
-    document.getElementById("undo").addEventListener("click", () => { objects.pop(); redraw(); });
-    document.getElementById("clear").addEventListener("click", () => { if (window.confirm("Clear all drawings on this page?")) { objects = []; redraw(); } });
+    document.getElementById("undo").addEventListener("click", () => { objects.pop(); selectedCommentIndex = -1; redraw(); });
+    document.getElementById("clear").addEventListener("click", () => { if (window.confirm("このページの注釈を全て消しますか？")) { objects = []; selectedCommentIndex = -1; redraw(); } });
     document.getElementById("save").addEventListener("click", () => {
       document.getElementById("status").textContent = "Saving...";
       post("streamlit:setComponentValue", {
@@ -143,6 +250,7 @@
         canvasKey = nextKey;
         const initial = args.initial_drawing || {};
         objects = Array.isArray(initial.objects) ? initial.objects : [];
+        selectedCommentIndex = -1;
       }
       const source = args.background_data_url || "";
       if (!source) { backgroundImage = null; redraw(); setHeight(); return; }
