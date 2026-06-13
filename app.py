@@ -1796,7 +1796,7 @@ def render_paper_pdf_annotations(paper, user_id, page_number, key_prefix="paper"
         except Exception:
             logger.exception("Failed to extract PDF text blocks")
             text_blocks = []
-    st.caption("PDF上へマーカー、ペン、図形を書き込み、Wordのような位置つきコメントを追加できます。編集中はページ全体の再読み込みは発生しません。")
+    st.caption("PDF上へマーカー、ペン、図形を書き込めます。コメントは文章をドラッグして引いたマーカーに紐づき、右側のコメント欄へ表示されます。")
     render_pdf_drawing_editor(
         paper_id,
         user_id,

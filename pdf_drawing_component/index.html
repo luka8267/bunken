@@ -16,10 +16,10 @@
     input[type="color"] { width: 42px; padding: 3px; }
     input[type="range"] { width: 110px; }
     textarea { min-width: 210px; height: 58px; padding: 7px 8px; resize: vertical; font: inherit; }
-    .workspace { display: flex; align-items: flex-start; gap: 10px; width: 100%; overflow-x: auto; }
-    .canvas-wrap { flex: 0 0 auto; overflow: hidden; border: 1px solid #d9dee7; border-radius: 6px; background: #eef1f5; }
-    canvas { display: block; max-width: none; background: #fff; cursor: crosshair; touch-action: none; }
-    .comments { position: sticky; top: 0; flex: 0 0 260px; max-height: 960px; overflow-y: auto; padding-right: 3px; }
+    .workspace { display: grid; grid-template-columns: minmax(360px, 1fr) 250px; align-items: start; gap: 10px; width: 100%; }
+    .canvas-wrap { min-width: 0; overflow: hidden; border: 1px solid #d9dee7; border-radius: 6px; background: #eef1f5; }
+    canvas { display: block; width: 100%; height: auto; background: #fff; cursor: crosshair; touch-action: none; }
+    .comments { position: sticky; top: 0; min-width: 0; max-height: 760px; overflow-y: auto; padding-right: 3px; }
     .comments-title { margin: 0 0 8px; font-size: 14px; }
     .empty-comments { padding: 14px; border: 1px dashed #c8d0dc; border-radius: 6px; color: #5b6675; font-size: 13px; }
     .comment-card { margin-bottom: 8px; padding: 9px; border: 1px solid #d9dee7; border-left: 4px solid #0f766e; border-radius: 6px; background: #fff; cursor: pointer; }
@@ -28,9 +28,9 @@
     .comment-card textarea { width: 100%; min-width: 0; height: 82px; }
     .comment-delete { min-height: 26px; padding: 2px 7px; color: #b42318; }
     .hint { margin: 7px 0 0; color: #5b6675; font-size: 12px; }
-    @media (max-width: 880px) {
+    @media (max-width: 700px) {
       .workspace { display: block; }
-      .comments { position: static; max-height: none; margin-top: 10px; }
+      .comments { position: static; max-height: none !important; margin-top: 10px; }
     }
   </style>
 </head>
@@ -44,7 +44,7 @@
     <button type="button" data-tool="eraser">&#28040;&#12375;&#12468;&#12512;</button>
     <input id="color" type="color" value="#f5c542" title="Color">
     <input id="width" type="range" min="2" max="28" value="12" title="Width">
-    <textarea id="memo" placeholder="&#12467;&#12513;&#12531;&#12488;&#12434;&#20837;&#21147;&#12375;&#12289;PDF&#19978;&#12398;&#22580;&#25152;&#12434;&#12463;&#12522;&#12483;&#12463;"></textarea>
+    <textarea id="memo" placeholder="&#12467;&#12513;&#12531;&#12488;&#12434;&#20837;&#21147;&#12375;&#12289;PDF&#19978;&#12398;&#25991;&#31456;&#12434;&#12489;&#12521;&#12483;&#12464;"></textarea>
     <button id="undo" type="button">&#20803;&#12395;&#25147;&#12377;</button>
     <button id="clear" type="button" class="danger">&#20840;&#12390;&#28040;&#12377;</button>
     <button id="save" type="button" class="primary">&#27880;&#37320;&#12434;&#20445;&#23384;</button>
@@ -70,11 +70,18 @@
     let backgroundImage = null;
     let canvasKey = "";
     let selectedCommentIndex = -1;
+    let lastFrameHeight = 0;
 
     function post(type, extra = {}) {
       window.parent.postMessage({ isStreamlitMessage: true, type, ...extra }, "*");
     }
-    function setHeight() { post("streamlit:setFrameHeight", { height: document.body.scrollHeight }); }
+    function setHeight() {
+      const height = document.body.scrollHeight;
+      if (height !== lastFrameHeight) {
+        lastFrameHeight = height;
+        post("streamlit:setFrameHeight", { height });
+      }
+    }
     function point(event) {
       const rect = canvas.getBoundingClientRect();
       return { x: (event.clientX - rect.left) * canvas.width / rect.width, y: (event.clientY - rect.top) * canvas.height / rect.height };
@@ -87,36 +94,32 @@
       ctx.lineWidth = Number(object.width || 4);
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      ctx.globalAlpha = object.type === "marker" ? 0.32 : 0.95;
+      ctx.globalAlpha = object.type === "marker" || object.type === "comment_highlight" ? 0.32 : 0.95;
     }
     function drawObject(object) {
       styleFor(object);
       const points = (object.points || []).map(pixels);
-      if ((object.type === "pen" || object.type === "marker") && points.length) {
+      if ((object.type === "pen" || object.type === "marker" || object.type === "comment_highlight") && points.length) {
+        if (object.type === "comment_highlight") {
+          const selected = objects.indexOf(object) === selectedCommentIndex;
+          ctx.strokeStyle = selected ? "#0f766e" : (object.color || "#f5c542");
+          ctx.lineWidth = selected ? Math.max(Number(object.width || 16) + 5, 21) : Number(object.width || 16);
+          ctx.globalAlpha = selected ? 0.45 : 0.3;
+        }
         ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+        if (points.length === 1) ctx.lineTo(points[0].x + 8, points[0].y);
         points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke();
       } else if (object.type === "line" && points.length > 1) {
         ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); ctx.lineTo(points[1].x, points[1].y); ctx.stroke();
       } else if (object.type === "rect" && points.length > 1) {
         ctx.strokeRect(points[0].x, points[0].y, points[1].x - points[0].x, points[1].y - points[0].y);
       } else if ((object.type === "comment" || object.type === "text") && points.length) {
-        const commentNumber = commentObjects().findIndex(item => item.object === object) + 1;
         const selected = objects.indexOf(object) === selectedCommentIndex;
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = selected ? 0.5 : 0.25;
         ctx.beginPath();
-        ctx.arc(points[0].x, points[0].y, selected ? 16 : 13, 0, Math.PI * 2);
-        ctx.fillStyle = selected ? "#0f766e" : "#ffffff";
+        ctx.arc(points[0].x, points[0].y, selected ? 9 : 7, 0, Math.PI * 2);
+        ctx.fillStyle = "#0f766e";
         ctx.fill();
-        ctx.lineWidth = selected ? 4 : 3;
-        ctx.strokeStyle = "#0f766e";
-        ctx.stroke();
-        ctx.fillStyle = selected ? "#ffffff" : "#0f766e";
-        ctx.font = "700 12px system-ui";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(commentNumber), points[0].x, points[0].y);
-        ctx.textAlign = "start";
-        ctx.textBaseline = "alphabetic";
       }
       ctx.globalAlpha = 1;
     }
@@ -130,7 +133,7 @@
     function commentObjects() {
       return objects
         .map((object, index) => ({ object, index }))
-        .filter(item => item.object.type === "comment" || item.object.type === "text");
+        .filter(item => ["comment_highlight", "comment", "text"].includes(item.object.type));
     }
     function selectComment(index) {
       selectedCommentIndex = index;
@@ -142,7 +145,7 @@
       if (!comments.length) {
         const empty = document.createElement("div");
         empty.className = "empty-comments";
-        empty.textContent = "PDF上の場所にコメントを追加すると、ここに表示されます。";
+        empty.textContent = "コメントを入力してPDF上の文章をドラッグすると、ここに表示されます。";
         commentList.appendChild(empty);
         return;
       }
@@ -153,7 +156,7 @@
         const head = document.createElement("div");
         head.className = "comment-head";
         const title = document.createElement("span");
-        title.textContent = `コメント ${commentIndex + 1}`;
+        title.textContent = `マーカーコメント ${commentIndex + 1}`;
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "comment-delete";
@@ -167,11 +170,12 @@
         const editor = document.createElement("textarea");
         editor.value = item.object.text || "";
         editor.addEventListener("click", event => event.stopPropagation());
-        editor.addEventListener("input", event => { item.object.text = event.target.value; });
+        editor.addEventListener("input", event => { item.object.text = event.target.value; setHeight(); });
         head.append(title, remove);
         card.append(head, editor);
         commentList.appendChild(card);
       });
+      setHeight();
     }
     function objectDistance(object, p) {
       const points = (object.points || []).map(pixels);
@@ -216,21 +220,33 @@
           document.getElementById("status").textContent = "先にコメント内容を入力してください。";
           return;
         }
-        objects.push({ type: "comment", color: "#0f766e", width: 4, text: textValue, points: [normalized(p)] });
-        selectedCommentIndex = objects.length - 1;
-        memoInput.value = "";
-        document.getElementById("status").textContent = "コメントを追加しました。保存すると反映されます。";
-        redraw(); return;
+        draft = { type: "comment_highlight", color: colorInput.value, width: Math.max(Number(widthInput.value), 16), text: textValue, points: [normalized(p)] };
+        return;
       }
       draft = { type: tool, color: colorInput.value, width: Number(widthInput.value), points: [normalized(p)] };
     });
     canvas.addEventListener("pointermove", event => {
       if (!draft) return;
       const p = normalized(point(event));
-      if (draft.type === "pen" || draft.type === "marker") draft.points.push(p); else draft.points[1] = p;
+      if (["pen", "marker", "comment_highlight"].includes(draft.type)) draft.points.push(p); else draft.points[1] = p;
       redraw();
     });
-    function finishDraft() { if (draft) { objects.push(draft); draft = null; redraw(); } }
+    function finishDraft() {
+      if (!draft) return;
+      if (draft.type === "comment_highlight") {
+        if (draft.points.length === 1) {
+          draft.points.push({ x: Math.min(draft.points[0].x + 0.06, 1), y: draft.points[0].y });
+        }
+        objects.push(draft);
+        selectedCommentIndex = objects.length - 1;
+        memoInput.value = "";
+        document.getElementById("status").textContent = "マーカーにコメントを紐づけました。保存すると反映されます。";
+      } else {
+        objects.push(draft);
+      }
+      draft = null;
+      redraw();
+    }
     canvas.addEventListener("pointerup", finishDraft);
     canvas.addEventListener("pointercancel", finishDraft);
     document.getElementById("undo").addEventListener("click", () => { objects.pop(); selectedCommentIndex = -1; redraw(); });
@@ -255,7 +271,13 @@
       const source = args.background_data_url || "";
       if (!source) { backgroundImage = null; redraw(); setHeight(); return; }
       backgroundImage = new Image();
-      backgroundImage.onload = () => { redraw(); setHeight(); };
+      backgroundImage.onload = () => {
+        redraw();
+        requestAnimationFrame(() => {
+          document.querySelector(".comments").style.maxHeight = `${canvas.getBoundingClientRect().height}px`;
+          setHeight();
+        });
+      };
       backgroundImage.src = source;
     }
     window.addEventListener("message", event => { if (event.data && event.data.type === "streamlit:render") render(event.data.args || {}); });
