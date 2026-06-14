@@ -263,6 +263,10 @@
     });
     function render(args) {
       const nextKey = String(args.canvas_key || "");
+      const displayPercent = Math.min(Math.max(Number(args.display_percent || 100), 45), 100);
+      const workspace = document.querySelector(".workspace");
+      workspace.style.width = `${displayPercent}%`;
+      workspace.style.margin = "0 auto";
       canvas.width = Math.max(320, Number(args.width || 720));
       canvas.height = Math.max(240, Number(args.height || 960));
       if (nextKey !== canvasKey) {

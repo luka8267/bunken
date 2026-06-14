@@ -1630,6 +1630,7 @@ def render_pdf_drawing_editor(
     page_image_bytes,
     current_page_annotations,
     key_prefix,
+    display_percent=100,
 ):
     if not page_image_bytes or Image is None:
         st.info("PDF上への手書き注釈は、PDFをアプリ内表示したときに利用できます。")
@@ -1660,6 +1661,7 @@ def render_pdf_drawing_editor(
         initial_drawing=(drawing_annotation or {}).get("drawing_data") or {},
         width=canvas_width,
         height=canvas_height,
+        display_percent=display_percent,
         canvas_key=f"{paper_id}:{page_number}",
         key=component_key,
         default=None,
@@ -1734,6 +1736,7 @@ def render_paper_pdf_annotations(
     page_state_key=None,
     page_image_bytes=None,
     page_count=None,
+    display_percent=100,
 ):
     paper_id = str(paper.get("id"))
     try:
@@ -1765,6 +1768,7 @@ def render_paper_pdf_annotations(
         page_image_bytes,
         current_page_annotations,
         key_prefix,
+        display_percent,
     )
     render_pdf_page_navigation(
         page_state_key,
@@ -1952,6 +1956,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
     page_key = f"{key_prefix}_pdf_page_{paper['id']}"
     zoom_key = f"{key_prefix}_pdf_zoom_{paper['id']}"
     quality_key = f"{key_prefix}_pdf_quality_{paper['id']}"
+    display_key = f"{key_prefix}_pdf_display_size_{paper['id']}"
     height_key = f"{key_prefix}_pdf_height_{paper['id']}"
     show_key = f"{key_prefix}_pdf_embed_{paper['id']}"
     if page_key not in st.session_state:
@@ -1960,10 +1965,14 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
         st.session_state[zoom_key] = 110
     if quality_key not in st.session_state:
         st.session_state[quality_key] = 2.4
+    if display_key not in st.session_state:
+        st.session_state[display_key] = 100
     if height_key not in st.session_state:
         st.session_state[height_key] = 760
 
-    control_col1, control_col2, control_col3, control_col4 = st.columns([1, 1, 1, 1.2])
+    control_col1, control_col2, control_col3, control_col4, control_col5 = st.columns(
+        [1, 1, 1, 1, 1.2]
+    )
     with control_col1:
         st.slider("拡大率", 60, 200, key=zoom_key)
     with control_col2:
@@ -1975,8 +1984,18 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
             help="高いほど文字が鮮明になりますが、ページの生成と表示に時間がかかります。",
         )
     with control_col3:
-        st.slider("高さ", 420, 1100, key=height_key)
+        st.slider(
+            "表示サイズ",
+            45,
+            100,
+            step=5,
+            key=display_key,
+            format="%d%%",
+            help="画質を保ったまま、画面上のPDFだけを小さくします。60〜70%が1ページ表示の目安です。",
+        )
     with control_col4:
+        st.slider("高さ", 420, 1100, key=height_key)
+    with control_col5:
         show_embed = st.toggle("アプリ内表示", value=True, key=show_key)
 
     pdf_bytes = None
@@ -2033,7 +2052,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                           <img
                             src="data:image/png;base64,{encoded_png}"
                             alt="PDF page {rendered_page}"
-                            style="display:block; max-width:none; width:100%; height:auto; margin:0 auto;"
+                            style="display:block; width:{st.session_state[display_key]}%; height:auto; margin:0 auto;"
                           />
                         </div>
                         """,
@@ -2051,6 +2070,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                         page_state_key=page_key,
                         page_image_bytes=png_bytes,
                         page_count=page_count,
+                        display_percent=st.session_state[display_key],
                     )
                     annotations_rendered = True
     if user_id and not annotations_rendered:
