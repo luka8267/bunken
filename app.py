@@ -2173,58 +2173,64 @@ def render_reading_workflow(paper, user_id, key_prefix="reading"):
         if current_status in READING_STATUSES
         else 0
     )
-    status_col1, status_col2, status_col3 = st.columns(3)
-    for index, next_status in enumerate(("読書中", "読了", "引用予定")):
-        with (status_col1, status_col2, status_col3)[index]:
-            if st.button(
-                next_status,
-                key=f"{key_prefix}_quick_{row_dict['id']}_{next_status}",
-                disabled=current_status == next_status,
-                use_container_width=True,
-            ):
-                update_paper_details(
-                    supabase,
-                    user_id,
-                    row_dict["id"],
+    status_tab, notes_tab, citation_tab, summary_tab = st.tabs(
+        ["ステータス", "基本・読書メモ", "引用予定", "Gemini要約"]
+    )
+    with status_tab:
+        status_col1, status_col2, status_col3 = st.columns(3)
+        for index, next_status in enumerate(("読書中", "読了", "引用予定")):
+            with (status_col1, status_col2, status_col3)[index]:
+                if st.button(
                     next_status,
-                    row_dict.get("notes") or "",
-                    normalize_url(row_dict.get("url")) or None,
-                    item_id=clean_optional_id(row_dict.get("item_id")),
-                    doi=normalize_doi(row_dict.get("doi")),
-                    volume=row_dict.get("volume") or "",
-                    issue=row_dict.get("issue") or "",
-                    pages=row_dict.get("pages") or "",
-                    publisher=row_dict.get("publisher") or "",
-                )
-                clear_library_caches()
-                st.success(f"ステータスを{next_status}にしました。")
-                st.rerun()
+                    key=f"{key_prefix}_quick_{row_dict['id']}_{next_status}",
+                    disabled=current_status == next_status,
+                    use_container_width=True,
+                ):
+                    update_paper_details(
+                        supabase,
+                        user_id,
+                        row_dict["id"],
+                        next_status,
+                        row_dict.get("notes") or "",
+                        normalize_url(row_dict.get("url")) or None,
+                        item_id=clean_optional_id(row_dict.get("item_id")),
+                        doi=normalize_doi(row_dict.get("doi")),
+                        volume=row_dict.get("volume") or "",
+                        issue=row_dict.get("issue") or "",
+                        pages=row_dict.get("pages") or "",
+                        publisher=row_dict.get("publisher") or "",
+                    )
+                    clear_library_caches()
+                    st.success(f"ステータスを{next_status}にしました。")
+                    st.rerun()
 
-    edit_status = st.selectbox(
-        "読書ステータス",
-        READING_STATUSES,
-        index=status_index,
-        key=f"{key_prefix}_status_{row_dict['id']}",
-    )
-    base_note = st.text_area(
-        "基本メモ",
-        value=notes_parts["base"],
-        height=100,
-        key=f"{key_prefix}_base_note_{row_dict['id']}",
-    )
-    reading_note = st.text_area(
-        "PDF読書メモ",
-        value=notes_parts["reading"],
-        height=170,
-        key=f"{key_prefix}_reading_note_{row_dict['id']}",
-    )
-    citation_note = st.text_area(
-        "引用予定メモ",
-        value=notes_parts["citation"],
-        height=120,
-        key=f"{key_prefix}_citation_note_{row_dict['id']}",
-    )
-    with st.expander("Gemini要約", expanded=False):
+        edit_status = st.selectbox(
+            "読書ステータス",
+            READING_STATUSES,
+            index=status_index,
+            key=f"{key_prefix}_status_{row_dict['id']}",
+        )
+    with notes_tab:
+        base_note = st.text_area(
+            "基本メモ",
+            value=notes_parts["base"],
+            height=100,
+            key=f"{key_prefix}_base_note_{row_dict['id']}",
+        )
+        reading_note = st.text_area(
+            "PDF読書メモ",
+            value=notes_parts["reading"],
+            height=170,
+            key=f"{key_prefix}_reading_note_{row_dict['id']}",
+        )
+    with citation_tab:
+        citation_note = st.text_area(
+            "引用予定メモ",
+            value=notes_parts["citation"],
+            height=150,
+            key=f"{key_prefix}_citation_note_{row_dict['id']}",
+        )
+    with summary_tab:
         render_gemini_summary_tool(
             row_dict,
             user_id,
@@ -4583,24 +4589,28 @@ elif menu == "PDF読書":
                 key="pdf_reading_selected_paper_id",
             )
             selected_pdf_paper = paper_by_id[selected_pdf_paper_id]
-            reader_col, note_col = st.columns([1.75, 1])
-            with reader_col:
-                render_section_header(
-                    selected_pdf_paper.get("title") or "無題",
-                    f"{selected_pdf_paper.get('journal') or '雑誌未設定'} / {selected_pdf_paper.get('year') or '-'}",
+            render_section_header(
+                selected_pdf_paper.get("title") or "無題",
+                f"{selected_pdf_paper.get('journal') or '雑誌未設定'} / {selected_pdf_paper.get('year') or '-'}",
+            )
+            reading_toolbar_col1, reading_toolbar_col2 = st.columns([3, 1])
+            with reading_toolbar_col1:
+                st.caption(
+                    f"読書ステータス: {selected_pdf_paper.get('status') or '未設定'}"
                 )
-                render_paper_pdf_preview(
-                    selected_pdf_paper,
-                    key_prefix="pdf_reading",
-                    user_id=user_id,
-                )
-            with note_col:
-                render_section_header("読書メモと引用予定")
-                render_reading_workflow(
-                    selected_pdf_paper,
-                    user_id,
-                    key_prefix="pdf_reading_workflow",
-                )
+            with reading_toolbar_col2:
+                with st.popover("読書情報・メモ", use_container_width=True):
+                    st.caption("ステータス、基本メモ、読書メモ、引用予定をまとめて編集します。")
+                    render_reading_workflow(
+                        selected_pdf_paper,
+                        user_id,
+                        key_prefix="pdf_reading_workflow",
+                    )
+            render_paper_pdf_preview(
+                selected_pdf_paper,
+                key_prefix="pdf_reading",
+                user_id=user_id,
+            )
 
 
 elif menu == "インポート":
