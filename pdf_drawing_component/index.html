@@ -16,7 +16,7 @@
     input[type="color"] { width: 42px; padding: 3px; }
     input[type="range"] { width: 110px; }
     textarea { min-width: 210px; height: 58px; padding: 7px 8px; resize: vertical; font: inherit; }
-    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 280px; align-items: start; gap: 10px; width: 100%; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 220px); align-items: start; gap: 10px; width: 100%; }
     .canvas-wrap { min-width: 0; overflow: hidden; border: 1px solid #d9dee7; border-radius: 6px; background: #eef1f5; }
     canvas { display: block; width: 100%; height: auto; background: #fff; cursor: default; touch-action: none; }
     .comments { position: sticky; top: 0; min-width: 0; max-height: 760px; overflow-y: auto; padding-right: 3px; }
@@ -28,10 +28,6 @@
     .comment-card textarea { width: 100%; min-width: 0; height: 82px; }
     .comment-delete { min-height: 26px; padding: 2px 7px; color: #b42318; }
     .hint { margin: 7px 0 0; color: #5b6675; font-size: 12px; }
-    @media (max-width: 700px) {
-      .workspace { display: block; }
-      .comments { position: static; max-height: none !important; margin-top: 10px; padding-right: 0; }
-    }
   </style>
 </head>
 <body>
