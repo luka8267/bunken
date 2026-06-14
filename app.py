@@ -1581,7 +1581,7 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     safe_page_number = min(max(int(page_number or 1), 1), max(page_count, 1))
     page = document.load_page(safe_page_number - 1)
     zoom = max(float(zoom_percent or 100) / 100.0, 0.5)
-    matrix = fitz.Matrix(zoom * 1.6, zoom * 1.6)
+    matrix = fitz.Matrix(zoom * 2.4, zoom * 2.4)
     pixmap = page.get_pixmap(matrix=matrix, alpha=False)
     return page_count, safe_page_number, pixmap.tobytes("png")
 
@@ -1650,7 +1650,7 @@ def render_pdf_drawing_editor(
         st.warning("PDF描画画面を準備できませんでした。")
         return
 
-    canvas_width = min(max(int(source_width), 720), 1200)
+    canvas_width = min(max(int(source_width), 1080), 1800)
     canvas_height = max(int(canvas_width * source_height / max(source_width, 1)), 320)
     encoded_png = base64.b64encode(page_image_bytes).decode("ascii")
     component_key = f"{key_prefix}_pdf_drawing_{paper_id}_{page_number}"
