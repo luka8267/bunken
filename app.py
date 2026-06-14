@@ -1756,7 +1756,7 @@ def render_paper_pdf_annotations(
         for key, value in PDF_ANNOTATION_TYPES.items()
         if value != "drawing"
     }
-    st.caption("「操作なし」ではPDFをクリックしても変更されません。マーカー、ペン、コメントを使った後は注釈を保存してください。")
+    st.caption("コメントはPDF上にラインを引くと右側に入力欄が表示されます。「操作なし」ではPDFをクリックしても変更されません。")
     render_pdf_drawing_editor(
         paper_id,
         user_id,

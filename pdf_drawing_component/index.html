@@ -16,20 +16,22 @@
     input[type="color"] { width: 42px; padding: 3px; }
     input[type="range"] { width: 110px; }
     textarea { min-width: 210px; height: 58px; padding: 7px 8px; resize: vertical; font: inherit; }
-    [hidden] { display: none !important; }
-    .workspace { display: block; width: 100%; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 280px; align-items: start; gap: 10px; width: 100%; }
     .canvas-wrap { min-width: 0; overflow: hidden; border: 1px solid #d9dee7; border-radius: 6px; background: #eef1f5; }
     canvas { display: block; width: 100%; height: auto; background: #fff; cursor: default; touch-action: none; }
-    .comments { min-width: 0; margin-top: 10px; }
+    .comments { position: sticky; top: 0; min-width: 0; max-height: 760px; overflow-y: auto; padding-right: 3px; }
     .comments-title { margin: 0 0 8px; font-size: 14px; }
-    .comment-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
     .empty-comments { padding: 14px; border: 1px dashed #c8d0dc; border-radius: 6px; color: #5b6675; font-size: 13px; }
-    .comment-card { padding: 9px; border: 1px solid #d9dee7; border-left: 4px solid #0f766e; border-radius: 6px; background: #fff; cursor: pointer; }
+    .comment-card { margin-bottom: 8px; padding: 9px; border: 1px solid #d9dee7; border-left: 4px solid #0f766e; border-radius: 6px; background: #fff; cursor: pointer; }
     .comment-card.selected { border-color: #0f766e; background: #f0fdfa; }
     .comment-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 12px; font-weight: 700; }
     .comment-card textarea { width: 100%; min-width: 0; height: 82px; }
     .comment-delete { min-height: 26px; padding: 2px 7px; color: #b42318; }
     .hint { margin: 7px 0 0; color: #5b6675; font-size: 12px; }
+    @media (max-width: 700px) {
+      .workspace { display: block; }
+      .comments { position: static; max-height: none !important; margin-top: 10px; padding-right: 0; }
+    }
   </style>
 </head>
 <body>
@@ -41,7 +43,6 @@
     <button type="button" data-tool="eraser">&#28040;&#12375;&#12468;&#12512;</button>
     <input id="color" type="color" value="#f5c542" title="Color">
     <input id="width" type="range" min="2" max="28" value="12" title="Width">
-    <textarea id="memo" hidden placeholder="&#12467;&#12513;&#12531;&#12488;&#12434;&#20837;&#21147;&#12375;&#12289;PDF&#19978;&#12398;&#25991;&#31456;&#12434;&#12489;&#12521;&#12483;&#12464;"></textarea>
     <button id="undo" type="button">&#20803;&#12395;&#25147;&#12377;</button>
     <button id="clear" type="button" class="danger">&#20840;&#12390;&#28040;&#12377;</button>
     <button id="save" type="button" class="primary">&#27880;&#37320;&#12434;&#20445;&#23384;</button>
@@ -59,7 +60,6 @@
     const ctx = canvas.getContext("2d");
     const colorInput = document.getElementById("color");
     const widthInput = document.getElementById("width");
-    const memoInput = document.getElementById("memo");
     const commentList = document.getElementById("comment-list");
     let tool = "select";
     let objects = [];
@@ -142,7 +142,7 @@
       if (!comments.length) {
         const empty = document.createElement("div");
         empty.className = "empty-comments";
-        empty.textContent = "コメントを入力してPDF上の文章をドラッグすると、ここに表示されます。";
+        empty.textContent = "コメントを選び、PDF上にラインを引くと入力欄が表示されます。";
         commentList.appendChild(empty);
         return;
       }
@@ -166,6 +166,8 @@
         });
         const editor = document.createElement("textarea");
         editor.value = item.object.text || "";
+        editor.dataset.objectIndex = String(item.index);
+        editor.placeholder = "このラインへのコメントを入力";
         editor.addEventListener("click", event => event.stopPropagation());
         editor.addEventListener("input", event => { item.object.text = event.target.value; setHeight(); });
         head.append(title, remove);
@@ -173,6 +175,10 @@
         commentList.appendChild(card);
       });
       setHeight();
+    }
+    function focusSelectedCommentEditor() {
+      const editor = commentList.querySelector(`textarea[data-object-index="${selectedCommentIndex}"]`);
+      if (editor) editor.focus();
     }
     function objectDistance(object, p) {
       const points = (object.points || []).map(pixels);
@@ -194,11 +200,10 @@
     function selectTool(nextTool) {
       tool = nextTool;
       document.querySelectorAll("[data-tool]").forEach(button => button.classList.toggle("active", button.dataset.tool === tool));
-      memoInput.hidden = tool !== "comment";
       canvas.style.cursor = tool === "select" ? "default" : (tool === "eraser" ? "not-allowed" : "crosshair");
       document.getElementById("status").textContent = tool === "select"
         ? "操作なし: PDFをクリックしても注釈は追加されません。"
-        : "注釈を追加したら、最後に「注釈を保存」を押してください。";
+        : (tool === "comment" ? "PDF上にラインを引くと、右側にコメント入力欄が表示されます。" : "注釈を追加したら、最後に「注釈を保存」を押してください。");
       setHeight();
     }
     document.querySelectorAll("[data-tool]").forEach(button => button.addEventListener("click", () => selectTool(button.dataset.tool)));
@@ -222,12 +227,7 @@
         redraw(); return;
       }
       if (tool === "comment") {
-        const textValue = memoInput.value.trim();
-        if (!textValue) {
-          document.getElementById("status").textContent = "先にコメント内容を入力してください。";
-          return;
-        }
-        draft = { type: "comment_highlight", color: colorInput.value, width: Math.max(Number(widthInput.value), 16), text: textValue, points: [normalized(p)] };
+        draft = { type: "comment_highlight", color: colorInput.value, width: Math.max(Number(widthInput.value), 16), text: "", points: [normalized(p)] };
         return;
       }
       draft = { type: tool, color: colorInput.value, width: Number(widthInput.value), points: [normalized(p)] };
@@ -246,13 +246,13 @@
         }
         objects.push(draft);
         selectedCommentIndex = objects.length - 1;
-        memoInput.value = "";
-        document.getElementById("status").textContent = "マーカーにコメントを紐づけました。保存すると反映されます。";
+        document.getElementById("status").textContent = "右側にコメントを入力し、最後に注釈を保存してください。";
       } else {
         objects.push(draft);
       }
       draft = null;
       redraw();
+      if (selectedCommentIndex >= 0) requestAnimationFrame(focusSelectedCommentEditor);
     }
     canvas.addEventListener("pointerup", finishDraft);
     canvas.addEventListener("pointercancel", finishDraft);
@@ -280,12 +280,19 @@
       backgroundImage = new Image();
       backgroundImage.onload = () => {
         redraw();
-        requestAnimationFrame(setHeight);
+        requestAnimationFrame(() => {
+          document.querySelector(".comments").style.maxHeight = `${canvas.getBoundingClientRect().height}px`;
+          setHeight();
+        });
       };
       backgroundImage.src = source;
     }
     window.addEventListener("message", event => { if (event.data && event.data.type === "streamlit:render") render(event.data.args || {}); });
     post("streamlit:componentReady", { apiVersion: 1 });
+    window.addEventListener("resize", () => {
+      document.querySelector(".comments").style.maxHeight = `${canvas.getBoundingClientRect().height}px`;
+      setHeight();
+    });
     setHeight();
   </script>
 </body>
