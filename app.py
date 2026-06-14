@@ -1573,7 +1573,7 @@ def render_paper_tag_editor(paper, user_id, tag_map, key_prefix="paper"):
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
+def render_pdf_page_png(pdf_bytes, page_number, zoom_percent, quality_multiplier=2.4):
     if fitz is None:
         raise RuntimeError("PyMuPDF is not installed")
     document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -1581,7 +1581,8 @@ def render_pdf_page_png(pdf_bytes, page_number, zoom_percent):
     safe_page_number = min(max(int(page_number or 1), 1), max(page_count, 1))
     page = document.load_page(safe_page_number - 1)
     zoom = max(float(zoom_percent or 100) / 100.0, 0.5)
-    matrix = fitz.Matrix(zoom * 2.4, zoom * 2.4)
+    quality = min(max(float(quality_multiplier or 2.4), 1.2), 3.5)
+    matrix = fitz.Matrix(zoom * quality, zoom * quality)
     pixmap = page.get_pixmap(matrix=matrix, alpha=False)
     return page_count, safe_page_number, pixmap.tobytes("png")
 
@@ -1650,7 +1651,7 @@ def render_pdf_drawing_editor(
         st.warning("PDF描画画面を準備できませんでした。")
         return
 
-    canvas_width = min(max(int(source_width), 1080), 1800)
+    canvas_width = min(max(int(source_width), 1080), 2600)
     canvas_height = max(int(canvas_width * source_height / max(source_width, 1)), 320)
     encoded_png = base64.b64encode(page_image_bytes).decode("ascii")
     component_key = f"{key_prefix}_pdf_drawing_{paper_id}_{page_number}"
@@ -1950,21 +1951,32 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
 
     page_key = f"{key_prefix}_pdf_page_{paper['id']}"
     zoom_key = f"{key_prefix}_pdf_zoom_{paper['id']}"
+    quality_key = f"{key_prefix}_pdf_quality_{paper['id']}"
     height_key = f"{key_prefix}_pdf_height_{paper['id']}"
     show_key = f"{key_prefix}_pdf_embed_{paper['id']}"
     if page_key not in st.session_state:
         st.session_state[page_key] = 1
     if zoom_key not in st.session_state:
         st.session_state[zoom_key] = 110
+    if quality_key not in st.session_state:
+        st.session_state[quality_key] = 2.4
     if height_key not in st.session_state:
         st.session_state[height_key] = 760
 
-    control_col1, control_col2, control_col3 = st.columns([1, 1, 1.2])
+    control_col1, control_col2, control_col3, control_col4 = st.columns([1, 1, 1, 1.2])
     with control_col1:
         st.slider("拡大率", 60, 200, key=zoom_key)
     with control_col2:
-        st.slider("高さ", 420, 1100, key=height_key)
+        st.select_slider(
+            "画質倍率",
+            options=[1.2, 1.6, 2.0, 2.4, 3.0, 3.5],
+            key=quality_key,
+            format_func=lambda value: f"{value:.1f}倍",
+            help="高いほど文字が鮮明になりますが、ページの生成と表示に時間がかかります。",
+        )
     with control_col3:
+        st.slider("高さ", 420, 1100, key=height_key)
+    with control_col4:
         show_embed = st.toggle("アプリ内表示", value=True, key=show_key)
 
     pdf_bytes = None
@@ -2005,6 +2017,7 @@ def render_paper_pdf_preview(paper, key_prefix="paper", user_id=None):
                     pdf_bytes,
                     st.session_state[page_key],
                     st.session_state[zoom_key],
+                    st.session_state[quality_key],
                 )
             except Exception:
                 logger.exception("Failed to render PDF page")
