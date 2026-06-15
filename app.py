@@ -3965,87 +3965,88 @@ elif menu == "一覧":
                             selected_list_index + 1
                         ]
                         st.rerun()
-                for record_index, record in enumerate(records, start=1):
-                    record_id = str(record["id"])
-                    is_selected = record_id == selected_list_paper_id
-                    status = record.get("status") or "未設定"
-                    missing_metadata_text = format_missing_publication_metadata(record)
+                with st.container(height=680, border=False):
+                    for record_index, record in enumerate(records, start=1):
+                        record_id = str(record["id"])
+                        is_selected = record_id == selected_list_paper_id
+                        status = record.get("status") or "未設定"
+                        missing_metadata_text = format_missing_publication_metadata(record)
 
-                    marker_html_parts = []
-                    if has_attachment_path(record.get("pdf_path")):
-                        marker_html_parts.append(make_status_pill("PDFあり", "accent"))
-                    else:
-                        marker_html_parts.append(make_status_pill("PDFなし", "danger"))
-                    if normalize_doi(record.get("doi")):
-                        marker_html_parts.append(make_status_pill("DOI", "accent"))
-                    else:
-                        marker_html_parts.append(make_status_pill("DOIなし", "danger"))
-                    if missing_metadata_text:
-                        marker_html_parts.append(make_status_pill("補完待ち", "warning"))
-                    render_compact_paper_card(
-                        record,
-                        is_selected,
-                        "".join(marker_html_parts),
-                    )
-                    bulk_label = bulk_label_by_id.get(record_id)
-                    bulk_selected = (
-                        bulk_label in st.session_state.get("list_bulk_selection", [])
-                        if bulk_label
-                        else False
-                    )
-                    select_col, open_col, status_col = st.columns([1, 1, 2])
-                    with select_col:
-                        select_label = "選択中" if bulk_selected else "選択"
-                        st.button(
-                            select_label,
-                            key=f"list_pane_bulk_select_{record_id}",
-                            disabled=not bulk_label,
-                            use_container_width=True,
-                            on_click=toggle_bulk_selection,
-                            args=(bulk_label,),
+                        marker_html_parts = []
+                        if has_attachment_path(record.get("pdf_path")):
+                            marker_html_parts.append(make_status_pill("PDFあり", "accent"))
+                        else:
+                            marker_html_parts.append(make_status_pill("PDFなし", "danger"))
+                        if normalize_doi(record.get("doi")):
+                            marker_html_parts.append(make_status_pill("DOI", "accent"))
+                        else:
+                            marker_html_parts.append(make_status_pill("DOIなし", "danger"))
+                        if missing_metadata_text:
+                            marker_html_parts.append(make_status_pill("補完待ち", "warning"))
+                        render_compact_paper_card(
+                            record,
+                            is_selected,
+                            "".join(marker_html_parts),
                         )
-                    with open_col:
-                        st.button(
-                            "表示中" if is_selected else "表示",
-                            key=f"list_pane_open_card_{record_id}",
-                            disabled=is_selected,
-                            use_container_width=True,
-                            on_click=open_list_paper,
-                            args=(record_id,),
+                        bulk_label = bulk_label_by_id.get(record_id)
+                        bulk_selected = (
+                            bulk_label in st.session_state.get("list_bulk_selection", [])
+                            if bulk_label
+                            else False
                         )
-                    with status_col:
-                        if is_selected:
-                            status_cols = st.columns(3)
-                            for status_index, next_status in enumerate(
-                                ("未読", "読書中", "読了")
-                            ):
-                                with status_cols[status_index]:
-                                    if st.button(
-                                        next_status,
-                                        key=f"list_pane_quick_status_{record_id}_{next_status}",
-                                        disabled=status == next_status,
-                                        use_container_width=True,
-                                    ):
-                                        update_paper_details(
-                                            supabase,
-                                            user_id,
-                                            record["id"],
+                        select_col, open_col, status_col = st.columns([1, 1, 2])
+                        with select_col:
+                            select_label = "選択中" if bulk_selected else "選択"
+                            st.button(
+                                select_label,
+                                key=f"list_pane_bulk_select_{record_id}",
+                                disabled=not bulk_label,
+                                use_container_width=True,
+                                on_click=toggle_bulk_selection,
+                                args=(bulk_label,),
+                            )
+                        with open_col:
+                            st.button(
+                                "表示中" if is_selected else "表示",
+                                key=f"list_pane_open_card_{record_id}",
+                                disabled=is_selected,
+                                use_container_width=True,
+                                on_click=open_list_paper,
+                                args=(record_id,),
+                            )
+                        with status_col:
+                            if is_selected:
+                                status_cols = st.columns(3)
+                                for status_index, next_status in enumerate(
+                                    ("未読", "読書中", "読了")
+                                ):
+                                    with status_cols[status_index]:
+                                        if st.button(
                                             next_status,
-                                            record.get("notes") or "",
-                                            normalize_url(record.get("url")) or None,
-                                            item_id=clean_optional_id(record.get("item_id")),
-                                            doi=normalize_doi(record.get("doi")),
-                                            volume=record.get("volume") or "",
-                                            issue=record.get("issue") or "",
-                                            pages=record.get("pages") or "",
-                                            publisher=record.get("publisher") or "",
-                                        )
-                                        clear_library_caches()
-                                        st.success(f"ステータスを{next_status}にしました。")
-                                        st.rerun()
-                    if record_index >= 80:
-                        st.caption("表示件数が多いため、中央ペインは先頭80件まで表示しています。")
-                        break
+                                            key=f"list_pane_quick_status_{record_id}_{next_status}",
+                                            disabled=status == next_status,
+                                            use_container_width=True,
+                                        ):
+                                            update_paper_details(
+                                                supabase,
+                                                user_id,
+                                                record["id"],
+                                                next_status,
+                                                record.get("notes") or "",
+                                                normalize_url(record.get("url")) or None,
+                                                item_id=clean_optional_id(record.get("item_id")),
+                                                doi=normalize_doi(record.get("doi")),
+                                                volume=record.get("volume") or "",
+                                                issue=record.get("issue") or "",
+                                                pages=record.get("pages") or "",
+                                                publisher=record.get("publisher") or "",
+                                            )
+                                            clear_library_caches()
+                                            st.success(f"ステータスを{next_status}にしました。")
+                                            st.rerun()
+                        if record_index >= 80:
+                            st.caption("表示件数が多いため、中央ペインは先頭80件まで表示しています。")
+                            break
 
             selected_list_paper = paper_by_id[selected_list_paper_id]
             selected_reference_ids = tuple(
