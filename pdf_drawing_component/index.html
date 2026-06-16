@@ -27,6 +27,7 @@
     .comment-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 12px; font-weight: 700; }
     .comment-card textarea { width: 100%; min-width: 0; height: 82px; }
     .comment-delete { min-height: 26px; padding: 2px 7px; color: #b42318; }
+    .comment-merge { min-height: 26px; padding: 2px 7px; color: #0f766e; }
     .hint { margin: 7px 0 0; color: #5b6675; font-size: 12px; }
   </style>
 </head>
@@ -83,6 +84,9 @@
     function normalized(p) { return { x: p.x / canvas.width, y: p.y / canvas.height }; }
     function pixels(p) { return { x: p.x * canvas.width, y: p.y * canvas.height }; }
     function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function buildStraightSegment(start, end) {
+      return [[start, { x: end.x, y: start.y }]];
+    }
     function inferHighlightBounds(start, end) {
       const edgePadding = 0.025;
       const gutterPadding = 0.02;
@@ -181,6 +185,30 @@
       selectedCommentIndex = index;
       redraw();
     }
+    function fallbackSegments(object) {
+      const points = object.points || [];
+      if (!points.length) return [];
+      return [[points[0], points[points.length - 1] || { x: Math.min(points[0].x + 0.06, 1), y: points[0].y }]];
+    }
+    function mergeCommentIntoSelected(sourceIndex) {
+      if (selectedCommentIndex < 0 || sourceIndex === selectedCommentIndex) return;
+      const target = objects[selectedCommentIndex];
+      const source = objects[sourceIndex];
+      if (!target || !source) return;
+      const targetSegments = Array.isArray(target.segments) && target.segments.length ? target.segments : fallbackSegments(target);
+      const sourceSegments = Array.isArray(source.segments) && source.segments.length ? source.segments : fallbackSegments(source);
+      target.segments = [...targetSegments, ...sourceSegments];
+      target.points = target.segments.flat();
+      const targetText = String(target.text || "").trim();
+      const sourceText = String(source.text || "").trim();
+      if (sourceText && sourceText !== targetText) {
+        target.text = targetText ? `${targetText}\n${sourceText}` : sourceText;
+      }
+      objects.splice(sourceIndex, 1);
+      if (sourceIndex < selectedCommentIndex) selectedCommentIndex -= 1;
+      redraw();
+      requestAnimationFrame(focusSelectedCommentEditor);
+    }
     function renderComments() {
       const comments = commentObjects();
       commentList.replaceChildren();
@@ -215,7 +243,20 @@
         editor.placeholder = "このラインへのコメントを入力";
         editor.addEventListener("click", event => event.stopPropagation());
         editor.addEventListener("input", event => { item.object.text = event.target.value; setHeight(); });
-        head.append(title, remove);
+        head.append(title);
+        if (selectedCommentIndex >= 0 && item.index !== selectedCommentIndex) {
+          const merge = document.createElement("button");
+          merge.type = "button";
+          merge.className = "comment-merge";
+          merge.textContent = "統合";
+          merge.title = "選択中のコメントへ統合";
+          merge.addEventListener("click", event => {
+            event.stopPropagation();
+            mergeCommentIntoSelected(item.index);
+          });
+          head.append(merge);
+        }
+        head.append(remove);
         card.append(head, editor);
         commentList.appendChild(card);
       });
@@ -277,7 +318,7 @@
       if (tool === "comment") {
         const start = normalized(p);
         const width = Math.max(Number(widthInput.value), 16);
-        draft = { type: "comment_highlight", color: colorInput.value, width, text: "", points: [start, start], segments: buildHighlightSegments(start, start, width) };
+        draft = { type: "comment_highlight", color: colorInput.value, width, text: "", points: [start, start], segments: buildStraightSegment(start, start) };
         return;
       }
       const start = normalized(p);
@@ -291,7 +332,10 @@
       const p = normalized(point(event));
       if (draft.type === "pen") {
         draft.points.push(p);
-      } else if (draft.type === "marker" || draft.type === "comment_highlight") {
+      } else if (draft.type === "comment_highlight") {
+        draft.points[1] = p;
+        draft.segments = buildStraightSegment(draft.points[0], p);
+      } else if (draft.type === "marker") {
         draft.points[1] = p;
         draft.segments = buildHighlightSegments(draft.points[0], p, draft.width);
       } else {
@@ -304,7 +348,7 @@
       if (draft.type === "comment_highlight") {
         if (!draft.points[1] || (draft.points[0].x === draft.points[1].x && draft.points[0].y === draft.points[1].y)) {
           draft.points[1] = { x: Math.min(draft.points[0].x + 0.06, 1), y: draft.points[0].y };
-          draft.segments = buildHighlightSegments(draft.points[0], draft.points[1], draft.width);
+          draft.segments = buildStraightSegment(draft.points[0], draft.points[1]);
         }
         objects.push(draft);
         selectedCommentIndex = objects.length - 1;
