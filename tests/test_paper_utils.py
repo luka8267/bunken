@@ -342,9 +342,28 @@ class PaperUtilsCollectionTests(unittest.TestCase):
             "Smith, Jane, Alpha, Beta",
         )
         self.assertEqual(
+            normalize_author_list([{"family": "Smith", "given": "Jane"}, "Alpha Beta"]),
+            "Smith, Jane, Beta, Alpha",
+        )
+        self.assertEqual(
             normalize_journal_title("J Am Chem Soc"),
             "Journal of the American Chemical Society",
         )
+
+    def test_exports_tolerate_structured_metadata_values(self):
+        row = {
+            "id": "paper-1",
+            "title": {"title": "Structured Title"},
+            "authors": [{"family": "Smith", "given": "Jane"}, "Alpha Beta"],
+            "year": 2024,
+            "journal": "Journal",
+            "doi": None,
+        }
+
+        self.assertIn("Structured Title", make_word_citation(row))
+        self.assertIn("Smith", make_bibtex_entry(row))
+        self.assertIn("Structured Title", make_bibtex_entry(row))
+        self.assertIn("AU  - Smith, Jane", make_ris_entry(row))
 
     def test_duplicate_groups_include_title_author_match_without_year(self):
         groups = find_duplicate_paper_groups(

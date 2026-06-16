@@ -155,6 +155,21 @@ def normalize_text_db_value(value):
     value = normalize_json_value(value)
     if value is None:
         return ""
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(
+            text
+            for text in (normalize_text_db_value(item).strip() for item in value)
+            if text
+        )
+    if isinstance(value, dict):
+        for key in ("name", "literal", "title", "value"):
+            if value.get(key):
+                return normalize_text_db_value(value.get(key))
+        if value.get("family") or value.get("given"):
+            family = normalize_text_db_value(value.get("family")).strip()
+            given = normalize_text_db_value(value.get("given")).strip()
+            return f"{family}, {given}".strip(", ")
+        return json.dumps(value, ensure_ascii=False)
     return str(value)
 
 
@@ -203,7 +218,11 @@ JOURNAL_NORMALIZATION_MAP = {
 
 
 def normalize_author_name(name):
-    text = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", name or "")).strip()
+    text = re.sub(
+        r"\s+",
+        " ",
+        unicodedata.normalize("NFKC", normalize_text_db_value(name)),
+    ).strip()
     if not text:
         return ""
     if "," in text:
@@ -216,11 +235,17 @@ def normalize_author_name(name):
 
 
 def normalize_author_list(authors):
+    if isinstance(authors, (list, tuple, set)):
+        return ", ".join(
+            name
+            for name in (normalize_author_name(author) for author in authors)
+            if name
+        )
     return ", ".join(
         name
         for name in (
             normalize_author_name(part)
-            for part in re.split(r"\s+and\s+|;|\|", authors or "")
+            for part in re.split(r"\s+and\s+|;|\|", normalize_text_db_value(authors))
         )
         if name
     )
@@ -2199,14 +2224,14 @@ def paper_to_csl_json(row):
     data = {
         "id": item_id,
         "type": csl_type,
-        "title": row.get("title") or "",
-        "container-title": row.get("journal") or "",
-        "volume": row.get("volume") or "",
-        "issue": row.get("issue") or "",
-        "page": row.get("pages") or "",
-        "publisher": row.get("publisher") or "",
+        "title": normalize_text_db_value(row.get("title")),
+        "container-title": normalize_text_db_value(row.get("journal")),
+        "volume": normalize_text_db_value(row.get("volume")),
+        "issue": normalize_text_db_value(row.get("issue")),
+        "page": normalize_text_db_value(row.get("pages")),
+        "publisher": normalize_text_db_value(row.get("publisher")),
         "DOI": normalize_doi(row.get("doi")) or "",
-        "URL": row.get("url") or "",
+        "URL": normalize_text_db_value(row.get("url")),
         "author": parse_csl_authors(row.get("authors")),
     }
     if year:
@@ -2247,12 +2272,12 @@ def append_missing_csl_doi(text, row, style="APA"):
 def make_word_citation_fallback(row, style="APA"):
     authors = normalize_author_text(row.get("authors", ""))
     year = row.get("year", "")
-    title = row.get("title", "")
-    journal = row.get("journal", "")
+    title = normalize_text_db_value(row.get("title"))
+    journal = normalize_text_db_value(row.get("journal"))
     doi = normalize_doi(row.get("doi", ""))
-    volume = row.get("volume", "")
-    issue = row.get("issue", "")
-    pages = row.get("pages", "")
+    volume = normalize_text_db_value(row.get("volume"))
+    issue = normalize_text_db_value(row.get("issue"))
+    pages = normalize_text_db_value(row.get("pages"))
     publication = journal
     if volume:
         publication += f", {volume}"
@@ -2287,19 +2312,33 @@ def make_word_citation(row, style="APA"):
 
 
 def make_bibtex_key(row):
-    authors = row.get("authors") or "unknown"
+    authors = normalize_author_text(row.get("authors")) or "unknown"
     first_author = re.split(r",| and ", authors, maxsplit=1)[0].strip()
     author_key = re.sub(r"[^A-Za-z0-9]+", "", first_author) or "unknown"
     year_key = re.sub(r"[^0-9]+", "", str(row.get("year") or "")) or "nodate"
-    title_words = re.findall(r"[A-Za-z0-9]+", row.get("title") or "")
+    title_words = re.findall(r"[A-Za-z0-9]+", normalize_text_db_value(row.get("title")))
     title_key = title_words[0] if title_words else "untitled"
     return f"{author_key}{year_key}{title_key}"
 
 
 def normalize_bibtex_authors(authors):
-    names = [name.strip() for name in re.split(r"\s+and\s+|;", authors or "") if name.strip()]
+    if isinstance(authors, (list, tuple, set)):
+        return [
+            name
+            for name in (normalize_author_name(author) for author in authors)
+            if name
+        ]
+    names = [
+        name.strip()
+        for name in re.split(r"\s+and\s+|;", normalize_text_db_value(authors))
+        if name.strip()
+    ]
     if len(names) == 1:
-        names = [name.strip() for name in (authors or "").split(",") if name.strip()]
+        names = [
+            name.strip()
+            for name in normalize_text_db_value(authors).split(",")
+            if name.strip()
+        ]
     return names
 
 
@@ -2319,16 +2358,16 @@ def escape_bibtex_value(value):
 def make_bibtex_entry(row):
     entry_type = "article" if row.get("journal") else "misc"
     fields = [
-        ("title", row.get("title")),
+        ("title", normalize_text_db_value(row.get("title"))),
         ("author", " and ".join(normalize_bibtex_authors(row.get("authors")))),
-        ("journal", row.get("journal")),
-        ("year", row.get("year")),
-        ("volume", row.get("volume")),
-        ("number", row.get("issue")),
-        ("pages", row.get("pages")),
-        ("publisher", row.get("publisher")),
+        ("journal", normalize_text_db_value(row.get("journal"))),
+        ("year", normalize_text_db_value(row.get("year"))),
+        ("volume", normalize_text_db_value(row.get("volume"))),
+        ("number", normalize_text_db_value(row.get("issue"))),
+        ("pages", normalize_text_db_value(row.get("pages"))),
+        ("publisher", normalize_text_db_value(row.get("publisher"))),
         ("doi", normalize_bibtex_doi(row.get("doi"))),
-        ("url", row.get("url")),
+        ("url", normalize_text_db_value(row.get("url"))),
     ]
     lines = [f"@{entry_type}{{{make_bibtex_key(row)},"]
     for field, value in fields:
@@ -2346,15 +2385,15 @@ def make_ris_entry(row):
     for author in normalize_bibtex_authors(row.get("authors")):
         lines.append(f"AU  - {author}")
     field_map = [
-        ("TI", row.get("title")),
-        ("T2", row.get("journal")),
-        ("PY", row.get("year")),
-        ("VL", row.get("volume")),
-        ("IS", row.get("issue")),
-        ("SP", row.get("pages")),
-        ("PB", row.get("publisher")),
+        ("TI", normalize_text_db_value(row.get("title"))),
+        ("T2", normalize_text_db_value(row.get("journal"))),
+        ("PY", normalize_text_db_value(row.get("year"))),
+        ("VL", normalize_text_db_value(row.get("volume"))),
+        ("IS", normalize_text_db_value(row.get("issue"))),
+        ("SP", normalize_text_db_value(row.get("pages"))),
+        ("PB", normalize_text_db_value(row.get("publisher"))),
         ("DO", normalize_bibtex_doi(row.get("doi"))),
-        ("UR", row.get("url")),
+        ("UR", normalize_text_db_value(row.get("url"))),
     ]
     for tag, value in field_map:
         if value not in (None, ""):
