@@ -64,6 +64,7 @@
     let canvasKey = "";
     let selectedCommentIndex = -1;
     let lastFrameHeight = 0;
+    let backgroundLoadToken = 0;
 
     function post(type, extra = {}) {
       window.parent.postMessage({ isStreamlitMessage: true, type, ...extra }, "*");
@@ -82,24 +83,43 @@
     function normalized(p) { return { x: p.x / canvas.width, y: p.y / canvas.height }; }
     function pixels(p) { return { x: p.x * canvas.width, y: p.y * canvas.height }; }
     function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function inferHighlightBounds(start, end) {
+      const edgePadding = 0.025;
+      const gutterPadding = 0.02;
+      const startColumn = start.x < 0.5 ? "left" : "right";
+      const endColumn = end.x < 0.5 ? "left" : "right";
+      if (startColumn === endColumn) {
+        return startColumn === "left"
+          ? { left: edgePadding, right: 0.5 - gutterPadding }
+          : { left: 0.5 + gutterPadding, right: 1 - edgePadding };
+      }
+      const left = clamp(Math.min(start.x, end.x) - edgePadding, edgePadding, 1 - edgePadding);
+      const right = clamp(Math.max(start.x, end.x) + edgePadding, edgePadding, 1 - edgePadding);
+      if (right - left < 0.12) {
+        return { left: clamp(left - 0.06, edgePadding, 1 - edgePadding), right: clamp(right + 0.06, edgePadding, 1 - edgePadding) };
+      }
+      return { left, right };
+    }
     function buildHighlightSegments(start, end, width) {
       const rowGap = Math.max(Number(width || 16) * 4.2, 48) / Math.max(canvas.height, 1);
-      const direction = end.y >= start.y ? 1 : -1;
-      const yDistance = Math.abs(end.y - start.y);
+      const topPoint = start.y <= end.y ? start : end;
+      const bottomPoint = start.y <= end.y ? end : start;
+      const yDistance = Math.abs(bottomPoint.y - topPoint.y);
       if (yDistance <= rowGap * 0.8) {
         return [[start, { x: end.x, y: start.y }]];
       }
 
       const segmentCount = Math.max(2, Math.floor(yDistance / rowGap) + 1);
+      const bounds = inferHighlightBounds(topPoint, bottomPoint);
       const segments = [];
       for (let index = 0; index < segmentCount; index += 1) {
-        const y = clamp(start.y + direction * rowGap * index, 0, 1);
+        const y = clamp(topPoint.y + rowGap * index, 0, 1);
         if (index === 0) {
-          segments.push([start, { x: 0.98, y }]);
+          segments.push([topPoint, { x: bounds.right, y }]);
         } else if (index === segmentCount - 1) {
-          segments.push([{ x: 0.02, y }, { x: end.x, y }]);
+          segments.push([{ x: bounds.left, y }, { x: bottomPoint.x, y }]);
         } else {
-          segments.push([{ x: 0.02, y }, { x: 0.98, y }]);
+          segments.push([{ x: bounds.left, y }, { x: bounds.right, y }]);
         }
       }
       return segments;
@@ -329,15 +349,20 @@
       }
       const source = args.background_data_url || "";
       if (!source) { backgroundImage = null; redraw(); setHeight(); return; }
-      backgroundImage = new Image();
-      backgroundImage.onload = () => {
+      const loadToken = backgroundLoadToken + 1;
+      backgroundLoadToken = loadToken;
+      const nextBackgroundImage = new Image();
+      backgroundImage = null;
+      nextBackgroundImage.onload = () => {
+        if (loadToken !== backgroundLoadToken) return;
+        backgroundImage = nextBackgroundImage;
         redraw();
         requestAnimationFrame(() => {
           document.querySelector(".comments").style.maxHeight = `${canvas.getBoundingClientRect().height}px`;
           setHeight();
         });
       };
-      backgroundImage.src = source;
+      nextBackgroundImage.src = source;
     }
     window.addEventListener("message", event => { if (event.data && event.data.type === "streamlit:render") render(event.data.args || {}); });
     post("streamlit:componentReady", { apiVersion: 1 });

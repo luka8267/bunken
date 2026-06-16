@@ -1694,38 +1694,46 @@ def render_pdf_page_navigation(page_state_key, page_number, page_count, key_pref
     if not page_state_key or not page_count:
         return
 
-    def set_page(next_page):
-        st.session_state[page_state_key] = next_page
+    input_key = f"{page_state_key}_input"
+    if st.session_state.get(input_key) != int(page_number or 1):
+        st.session_state[input_key] = int(page_number or 1)
+
+    def set_page(next_page, sync_input=True):
+        safe_next_page = min(max(int(next_page or 1), 1), int(page_count))
+        st.session_state[page_state_key] = safe_next_page
+        if sync_input and st.session_state.get(input_key) != safe_next_page:
+            st.session_state[input_key] = safe_next_page
+        st.rerun()
 
     previous_col, page_col, next_col = st.columns([1, 2, 1])
     with previous_col:
-        st.button(
+        if st.button(
             "前のページ",
-            key=f"{key_prefix}_pdf_previous_{paper_id}_{page_number}",
+            key=f"{key_prefix}_pdf_previous_{paper_id}",
             disabled=page_number <= 1,
             use_container_width=True,
-            on_click=set_page,
-            args=(page_number - 1,),
-        )
+        ):
+            set_page(page_number - 1)
     with page_col:
-        st.number_input(
+        selected_page = st.number_input(
             "PDFページ",
             min_value=1,
             max_value=int(page_count),
             step=1,
-            key=page_state_key,
+            key=input_key,
             label_visibility="collapsed",
         )
+        if int(selected_page or 1) != int(page_number or 1):
+            set_page(selected_page, sync_input=False)
         st.caption(f"ページ {page_number} / {page_count}")
     with next_col:
-        st.button(
+        if st.button(
             "次のページ",
-            key=f"{key_prefix}_pdf_next_{paper_id}_{page_number}",
+            key=f"{key_prefix}_pdf_next_{paper_id}",
             disabled=page_number >= page_count,
             use_container_width=True,
-            on_click=set_page,
-            args=(page_number + 1,),
-        )
+        ):
+            set_page(page_number + 1)
 
 
 def render_paper_pdf_annotations(
