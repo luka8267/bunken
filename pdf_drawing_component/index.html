@@ -81,6 +81,29 @@
     }
     function normalized(p) { return { x: p.x / canvas.width, y: p.y / canvas.height }; }
     function pixels(p) { return { x: p.x * canvas.width, y: p.y * canvas.height }; }
+    function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function buildHighlightSegments(start, end, width) {
+      const rowGap = Math.max(Number(width || 16) * 4.2, 48) / Math.max(canvas.height, 1);
+      const direction = end.y >= start.y ? 1 : -1;
+      const yDistance = Math.abs(end.y - start.y);
+      if (yDistance <= rowGap * 0.8) {
+        return [[start, { x: end.x, y: start.y }]];
+      }
+
+      const segmentCount = Math.max(2, Math.floor(yDistance / rowGap) + 1);
+      const segments = [];
+      for (let index = 0; index < segmentCount; index += 1) {
+        const y = clamp(start.y + direction * rowGap * index, 0, 1);
+        if (index === 0) {
+          segments.push([start, { x: 0.98, y }]);
+        } else if (index === segmentCount - 1) {
+          segments.push([{ x: 0.02, y }, { x: end.x, y }]);
+        } else {
+          segments.push([{ x: 0.02, y }, { x: 0.98, y }]);
+        }
+      }
+      return segments;
+    }
     function styleFor(object) {
       ctx.strokeStyle = object.color || "#f5c542";
       ctx.fillStyle = object.color || "#f5c542";
@@ -92,6 +115,7 @@
     function drawObject(object) {
       styleFor(object);
       const points = (object.points || []).map(pixels);
+      const segments = (object.segments || []).map(segment => segment.map(pixels));
       if ((object.type === "pen" || object.type === "marker" || object.type === "comment_highlight") && points.length) {
         if (object.type === "comment_highlight") {
           const selected = objects.indexOf(object) === selectedCommentIndex;
@@ -99,9 +123,14 @@
           ctx.lineWidth = selected ? Math.max(Number(object.width || 16) + 5, 21) : Number(object.width || 16);
           ctx.globalAlpha = selected ? 0.45 : 0.3;
         }
-        ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
-        if (points.length === 1) ctx.lineTo(points[0].x + 8, points[0].y);
-        points.slice(1).forEach(p => ctx.lineTo(p.x, p.y)); ctx.stroke();
+        const drawableSegments = segments.length ? segments : [[points[0], points[points.length - 1] || { x: points[0].x + 8, y: points[0].y }]];
+        drawableSegments.forEach(segment => {
+          if (segment.length < 2) return;
+          ctx.beginPath();
+          ctx.moveTo(segment[0].x, segment[0].y);
+          ctx.lineTo(segment[1].x, segment[1].y);
+          ctx.stroke();
+        });
       } else if (object.type === "line" && points.length > 1) {
         ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); ctx.lineTo(points[1].x, points[1].y); ctx.stroke();
       } else if (object.type === "rect" && points.length > 1) {
@@ -177,7 +206,10 @@
       if (editor) editor.focus();
     }
     function objectDistance(object, p) {
-      const points = (object.points || []).map(pixels);
+      const points = [
+        ...(object.points || []).map(pixels),
+        ...(object.segments || []).flat().map(pixels),
+      ];
       if (!points.length) return Infinity;
       return Math.min(...points.map(q => Math.hypot(q.x - p.x, q.y - p.y)));
     }
@@ -223,26 +255,46 @@
         redraw(); return;
       }
       if (tool === "comment") {
-        draft = { type: "comment_highlight", color: colorInput.value, width: Math.max(Number(widthInput.value), 16), text: "", points: [normalized(p)] };
+        const start = normalized(p);
+        const width = Math.max(Number(widthInput.value), 16);
+        draft = { type: "comment_highlight", color: colorInput.value, width, text: "", points: [start, start], segments: buildHighlightSegments(start, start, width) };
         return;
       }
-      draft = { type: tool, color: colorInput.value, width: Number(widthInput.value), points: [normalized(p)] };
+      const start = normalized(p);
+      draft = { type: tool, color: colorInput.value, width: Number(widthInput.value), points: [start, start] };
+      if (tool === "marker") {
+        draft.segments = buildHighlightSegments(start, start, draft.width);
+      }
     });
     canvas.addEventListener("pointermove", event => {
       if (!draft) return;
       const p = normalized(point(event));
-      if (["pen", "marker", "comment_highlight"].includes(draft.type)) draft.points.push(p); else draft.points[1] = p;
+      if (draft.type === "pen") {
+        draft.points.push(p);
+      } else if (draft.type === "marker" || draft.type === "comment_highlight") {
+        draft.points[1] = p;
+        draft.segments = buildHighlightSegments(draft.points[0], p, draft.width);
+      } else {
+        draft.points[1] = p;
+      }
       redraw();
     });
     function finishDraft() {
       if (!draft) return;
       if (draft.type === "comment_highlight") {
-        if (draft.points.length === 1) {
-          draft.points.push({ x: Math.min(draft.points[0].x + 0.06, 1), y: draft.points[0].y });
+        if (!draft.points[1] || (draft.points[0].x === draft.points[1].x && draft.points[0].y === draft.points[1].y)) {
+          draft.points[1] = { x: Math.min(draft.points[0].x + 0.06, 1), y: draft.points[0].y };
+          draft.segments = buildHighlightSegments(draft.points[0], draft.points[1], draft.width);
         }
         objects.push(draft);
         selectedCommentIndex = objects.length - 1;
         document.getElementById("status").textContent = "右側にコメントを入力し、最後に注釈を保存してください。";
+      } else if (draft.type === "marker") {
+        if (!draft.points[1] || (draft.points[0].x === draft.points[1].x && draft.points[0].y === draft.points[1].y)) {
+          draft.points[1] = { x: Math.min(draft.points[0].x + 0.06, 1), y: draft.points[0].y };
+          draft.segments = buildHighlightSegments(draft.points[0], draft.points[1], draft.width);
+        }
+        objects.push(draft);
       } else {
         objects.push(draft);
       }
