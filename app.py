@@ -1698,11 +1698,9 @@ def render_pdf_page_navigation(page_state_key, page_number, page_count, key_pref
     if st.session_state.get(input_key) != int(page_number or 1):
         st.session_state[input_key] = int(page_number or 1)
 
-    def set_page(next_page, sync_input=True):
+    def set_page(next_page):
         safe_next_page = min(max(int(next_page or 1), 1), int(page_count))
         st.session_state[page_state_key] = safe_next_page
-        if sync_input and st.session_state.get(input_key) != safe_next_page:
-            st.session_state[input_key] = safe_next_page
         st.rerun()
 
     previous_col, page_col, next_col = st.columns([1, 2, 1])
@@ -1724,7 +1722,7 @@ def render_pdf_page_navigation(page_state_key, page_number, page_count, key_pref
             label_visibility="collapsed",
         )
         if int(selected_page or 1) != int(page_number or 1):
-            set_page(selected_page, sync_input=False)
+            set_page(selected_page)
         st.caption(f"ページ {page_number} / {page_count}")
     with next_col:
         if st.button(
