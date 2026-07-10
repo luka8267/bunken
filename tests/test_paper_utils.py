@@ -28,6 +28,7 @@ from paper_utils import (
     make_bibtex_entry,
     make_ris_entry,
     make_word_citation,
+    merge_duplicate_paper,
     normalize_annotation_rect,
     normalize_pdf_drawing_data,
     normalize_doi,
@@ -103,13 +104,26 @@ class Query:
 
 
 class FakeSupabase:
-    def __init__(self, tables, failures=None):
+    def __init__(self, tables, failures=None, rpc_results=None):
         self.tables = tables
         self.failures = failures or {}
+        self.rpc_results = rpc_results or {}
         self.calls = []
 
     def table(self, name):
         return Query(name, self.tables.get(name, []), self.calls, self.failures)
+
+    def rpc(self, name, params):
+        self.calls.append(("rpc", name, params))
+        return RpcQuery(self.rpc_results.get(name, {}))
+
+
+class RpcQuery:
+    def __init__(self, data):
+        self.data = data
+
+    def execute(self):
+        return Result(self.data)
 
 
 class FakeStorageBucket:
@@ -270,6 +284,26 @@ class PaperUtilsCollectionTests(unittest.TestCase):
             self.assertEqual(archive.read(names[0]), b"%PDF-A")
             self.assertEqual(archive.read(names[1]), b"%PDF-B")
             self.assertNotEqual(names[0], names[1])
+
+    def test_build_pdf_download_zip_stops_at_the_size_limit(self):
+        supabase = FakeStorageSupabase(
+            {
+                "user-id/a.pdf": b"%PDF-A",
+                "user-id/b.pdf": b"%PDF-B",
+            }
+        )
+        result = build_pdf_download_zip(
+            supabase,
+            [
+                {"id": "p1", "title": "A", "pdf_path": "user-id/a.pdf"},
+                {"id": "p2", "title": "B", "pdf_path": "user-id/b.pdf"},
+            ],
+            max_total_bytes=6,
+        )
+
+        self.assertEqual(result["count"], 1)
+        self.assertTrue(result["limit_reached"])
+        self.assertEqual(result["failed"][0]["error"], "archive_size_limit")
 
     def test_extract_pdf_summary_sections_finds_main_sections(self):
         sections = extract_pdf_summary_sections(
@@ -879,6 +913,29 @@ ER  -
         payload = insert_calls[0][2]
         self.assertEqual(payload["keeper_paper_id"], "keep-1")
         self.assertEqual(payload["duplicate_snapshot"]["title"], "Duplicate")
+
+    def test_merge_duplicate_paper_uses_one_atomic_rpc(self):
+        supabase = FakeSupabase(
+            {},
+            rpc_results={
+                "merge_duplicate_papers_atomic": {
+                    "backup_id": "backup-1",
+                    "merge_group_id": "group-1",
+                    "citation_updates": 2,
+                }
+            },
+        )
+        keeper = {"id": 1, "title": "Keeper", "authors": "", "notes": ""}
+        duplicate = {"id": 2, "title": "Duplicate", "authors": "Author", "notes": ""}
+
+        result = merge_duplicate_paper(supabase, "user-1", keeper, duplicate, merge_group_id="group-1")
+
+        self.assertEqual(result["citation_updates"], 2)
+        self.assertEqual(result["backup_ids"], ["backup-1"])
+        rpc_call = supabase.calls[0]
+        self.assertEqual(rpc_call[0:2], ("rpc", "merge_duplicate_papers_atomic"))
+        self.assertEqual(rpc_call[2]["p_keeper_paper_id"], 1)
+        self.assertEqual(rpc_call[2]["p_duplicate_paper_id"], 2)
 
     def test_fetch_duplicate_merge_backups_filters_user(self):
         supabase = FakeSupabase(

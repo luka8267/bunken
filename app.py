@@ -36,7 +36,8 @@ except ImportError:
     Image = None
     ImageDraw = None
 
-from auth_utils import (
+from auth_utils import (  # noqa: E402
+    MIN_PASSWORD_LENGTH,
     build_supabase_client,
     get_current_user_id,
     login_user,
@@ -50,7 +51,7 @@ from auth_utils import (
     update_password,
     verify_password_reset_token,
 )
-from paper_utils import (
+from paper_utils import (  # noqa: E402
     READING_STATUSES,
     SORT_OPTIONS,
     build_document_citation_export_rows,
@@ -125,7 +126,7 @@ pdf_drawing_canvas = components.declare_component(
     "pdf_drawing_canvas",
     path=PDF_DRAWING_COMPONENT_DIR,
 )
-import paper_utils as paper_utils_module
+import paper_utils as paper_utils_module  # noqa: E402
 
 DOI_FORM_FIELDS = (
     "title",
@@ -641,7 +642,7 @@ def show_password_reset_request_form():
                 redirect_to=get_password_reset_redirect_url(),
             )
             st.success("再設定メールを送信しました。メール内のリンクから新しいパスワードを設定してください。")
-        except Exception as error:
+        except Exception:
             logger.exception("Failed to request password reset")
             st.error("再設定メールを送信できませんでした。メールアドレスを確認して、もう一度お試しください。")
 
@@ -660,7 +661,7 @@ def show_password_update_form():
             if getattr(response, "session", None):
                 store_auth_session(response.session)
             st.session_state["password_reset_verified"] = True
-        except Exception as error:
+        except Exception:
             logger.exception("Failed to verify password reset token")
             st.error("再設定リンクを確認できませんでした。もう一度パスワード再設定を行ってください。")
             return
@@ -671,7 +672,7 @@ def show_password_update_form():
             if getattr(response, "session", None):
                 store_auth_session(response.session)
             st.session_state["password_reset_verified"] = True
-        except Exception as error:
+        except Exception:
             logger.exception("Failed to restore password reset session")
             st.error("再設定リンクの有効期限が切れています。もう一度パスワード再設定を行ってください。")
             return
@@ -682,8 +683,8 @@ def show_password_update_form():
         submitted = st.form_submit_button("パスワードを更新")
 
     if submitted:
-        if not password or len(password) < 6:
-            st.error("パスワードは6文字以上で入力してください。")
+        if not password or len(password) < MIN_PASSWORD_LENGTH:
+            st.error(f"パスワードは{MIN_PASSWORD_LENGTH}文字以上で入力してください。")
             return
         if password != password_confirm:
             st.error("確認用パスワードが一致しません。")
@@ -695,7 +696,7 @@ def show_password_update_form():
             st.query_params.clear()
             sign_out_user(supabase)
             st.success("パスワードを更新しました。新しいパスワードでログインしてください。")
-        except Exception as error:
+        except Exception:
             logger.exception("Failed to update password")
             st.error("パスワードを更新できませんでした。時間をおいてもう一度お試しください。")
 
@@ -1095,7 +1096,7 @@ def render_annotation_to_citation_button(paper, user_id, annotation, key_prefix)
             append_annotation_to_citation_note(paper, user_id, annotation)
             st.success("注釈を引用予定メモに追加しました。")
             st.rerun()
-        except Exception as error:
+        except Exception:
             logger.exception("Failed to append annotation to citation note")
             st.error("引用予定メモに追加できませんでした。時間をおいてもう一度お試しください。")
 
@@ -1542,7 +1543,7 @@ def render_paper_delete_control(paper, user_id, key_prefix="paper"):
                     if str(st.session_state.get(key, "")) == str(paper_id):
                         st.session_state.pop(key, None)
                 st.rerun()
-            except Exception as error:
+            except Exception:
                 logger.exception("Failed to delete paper")
                 st.error("削除できませんでした。時間をおいてもう一度お試しください。")
 
@@ -2103,9 +2104,19 @@ def render_gemini_summary_tool(row_dict, user_id, notes_parts, key_prefix):
     )
     summary_key = f"{key_prefix}_gemini_summary_{row_dict['id']}"
     source_key = f"{key_prefix}_gemini_source_{row_dict['id']}"
-    run_disabled = not api_key or not has_attachment_path(row_dict.get("pdf_path"))
+    gemini_consent = st.checkbox(
+        "PDFから抽出した本文の一部をGeminiへ送信することに同意します。",
+        key=f"{key_prefix}_gemini_consent_{row_dict['id']}",
+    )
+    run_disabled = (
+        not api_key
+        or not has_attachment_path(row_dict.get("pdf_path"))
+        or not gemini_consent
+    )
     if not has_attachment_path(row_dict.get("pdf_path")):
         st.caption("PDFが添付されていない文献はPDF本文から要約できません。")
+    elif not gemini_consent:
+        st.caption("同意すると要約を実行できます。未公開原稿や機密情報を含むPDFは送信しないでください。")
 
     if st.button(
         "PDFから要約を生成",
@@ -2131,7 +2142,7 @@ def render_gemini_summary_tool(row_dict, user_id, notes_parts, key_prefix):
                 "conclusion": bool(sections.get("conclusion")),
             }
             st.success("Gemini要約を生成しました。")
-        except Exception as error:
+        except Exception:
             logger.exception("Failed to summarize paper with Gemini")
             st.error("AI要約を作成できませんでした。時間をおいてもう一度お試しください。")
 
@@ -2966,6 +2977,8 @@ if "user_id" not in st.session_state:
             normalized_username = normalize_username(username)
             if not normalized_email or not normalized_username or not password:
                 st.error("メールアドレス、ユーザー名、パスワードを入力してください。")
+            elif len(password) < MIN_PASSWORD_LENGTH:
+                st.error(f"パスワードは{MIN_PASSWORD_LENGTH}文字以上で入力してください。")
             else:
                 try:
                     response = register_user(
@@ -2981,7 +2994,7 @@ if "user_id" not in st.session_state:
                         st.rerun()
                     else:
                         st.success("登録しました。メール確認後にログインしてください。")
-                except Exception as error:
+                except Exception:
                     logger.exception("Failed to register user")
                     st.error("登録できませんでした。メールアドレスとパスワードを確認してください。")
     else:
@@ -3565,6 +3578,11 @@ elif menu == "一覧":
                                 st.session_state["bulk_pdf_zip_suffix"] = pdf_suffix
                                 if pdf_zip_result["count"]:
                                     st.success(f"{pdf_zip_result['count']}件のPDFをまとめました。")
+                                    if pdf_zip_result["limit_reached"]:
+                                        limit_mb = pdf_zip_result["max_total_bytes"] // (1024 * 1024)
+                                        st.warning(
+                                            f"ZIPは{limit_mb} MBまでです。残りのPDFは対象を分けて準備してください。"
+                                        )
                                 else:
                                     st.warning("ダウンロードできるPDFがありませんでした。")
 
@@ -5275,7 +5293,7 @@ elif menu == "重複確認":
                                     user_id,
                                     backup,
                                 )
-                            except Exception as error:
+                            except Exception:
                                 logger.exception("Failed to restore duplicate merge backup")
                                 st.error("復元できませんでした。時間をおいてもう一度お試しください。")
                             else:
@@ -5303,7 +5321,7 @@ elif menu == "重複確認":
                                     user_id,
                                     backup,
                                 )
-                            except Exception as error:
+                            except Exception:
                                 logger.exception("Failed to restore duplicate from backup")
                                 st.error("統合元を再作成できませんでした。時間をおいてもう一度お試しください。")
                             else:
@@ -5496,7 +5514,7 @@ elif menu == "重複確認":
                             st.rerun()
                         except ValueError as error:
                             st.error(str(error))
-                        except Exception as error:
+                        except Exception:
                             logger.exception("Failed to merge duplicate papers")
                             st.error("統合できませんでした。対象文献を確認して、もう一度お試しください。")
 
@@ -5561,7 +5579,7 @@ elif menu == "重複確認":
                                         "文献は削除しましたが、一部の添付ファイルが残っている可能性があります。"
                                     )
                                 st.rerun()
-                        except Exception as error:
+                        except Exception:
                             logger.exception("Failed to delete duplicate papers")
                             st.error("削除できませんでした。時間をおいてもう一度お試しください。")
 
@@ -5616,7 +5634,7 @@ elif menu == "文書引用":
                     delete_user_document(supabase, user_id, selected_document["id"])
                     st.success("同期文書を削除しました。")
                     st.rerun()
-                except Exception as error:
+                except Exception:
                     logger.exception("Failed to delete document")
                     st.error("同期記録を削除できませんでした。時間をおいてもう一度お試しください。")
 
@@ -5644,7 +5662,7 @@ elif menu == "文書引用":
                     )
                     st.success("この文書のCSLスタイルを保存しました。")
                     st.rerun()
-                except Exception as error:
+                except Exception:
                     logger.exception("Failed to update document CSL style")
                     st.error("CSLスタイルを保存できませんでした。時間をおいてもう一度お試しください。")
 

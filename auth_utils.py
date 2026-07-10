@@ -13,6 +13,12 @@ AUTH_SESSION_KEYS = (
     "username",
     "email",
 )
+MIN_PASSWORD_LENGTH = 12
+
+
+def validate_password(password):
+    if not isinstance(password, str) or len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters long.")
 
 
 def clear_auth_session():
@@ -105,6 +111,7 @@ def set_authenticated_user(supabase, user, username=None):
 
 
 def register_user(supabase, email, password, username):
+    validate_password(password)
     return supabase.auth.sign_up(
         {
             "email": email,
@@ -138,6 +145,7 @@ def verify_password_reset_token(supabase, token_hash):
 
 
 def update_password(supabase, password):
+    validate_password(password)
     return supabase.auth.update_user({"password": password})
 
 

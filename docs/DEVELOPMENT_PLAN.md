@@ -116,11 +116,12 @@ For the Word add-in repository:
 
 ```powershell
 python -m py_compile `
-  bunkenn\azure-static-web-apps\api\shared\data_access.py `
-  bunkenn\azure-static-web-apps\api\shared\bunken_service.py `
-  bunkenn\azure-static-web-apps\api\shared\bunken_models.py `
-  bunkenn\azure-static-web-apps\api\addin_papers\__init__.py `
-  bunkenn\azure-static-web-apps\api\addin_documents_sync\__init__.py
+  api\_bunken_vercel.py `
+  bunkenn\word-app\api\shared\data_access.py `
+  bunkenn\word-app\api\shared\bunken_service.py `
+  bunkenn\word-app\api\shared\bunken_models.py
+node --check bunkenn\word-app\static\taskpane.js
+npm run build
 ```
 
 Then verify:

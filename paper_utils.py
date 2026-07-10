@@ -67,6 +67,7 @@ PDF_ANNOTATION_TYPES = {
 }
 MAX_PDF_DRAWING_OBJECTS = 300
 MAX_PDF_DRAWING_JSON_BYTES = 750000
+MAX_PDF_DOWNLOAD_ZIP_BYTES = 250 * 1024 * 1024
 
 
 def is_missing_relation_error(error):
@@ -1964,7 +1965,7 @@ def delete_document_citation(supabase, citation_id):
     return supabase.table("document_citations").delete().eq("id", citation_id).execute()
 
 
-def merge_duplicate_paper(
+def _merge_duplicate_paper_non_atomic(
     supabase,
     user_id,
     keeper,
@@ -1982,7 +1983,7 @@ def merge_duplicate_paper(
     if is_item_backed_paper(keeper) or is_item_backed_paper(duplicate):
         if not is_item_backed_paper(keeper) or not is_item_backed_paper(duplicate):
             raise ValueError("items由来とpapers由来の文献は自動統合できません。")
-        result = merge_duplicate_item(
+        result = _merge_duplicate_item_non_atomic(
             supabase,
             user_id,
             keeper,
@@ -2050,7 +2051,7 @@ def merge_duplicate_paper(
     }
 
 
-def merge_duplicate_item(supabase, user_id, keeper, duplicate, preferred_fields=None):
+def _merge_duplicate_item_non_atomic(supabase, user_id, keeper, duplicate, preferred_fields=None):
     ensure_user_owns_item(supabase, user_id, keeper["item_id"])
     ensure_user_owns_item(supabase, user_id, duplicate["item_id"])
 
@@ -2114,6 +2115,121 @@ def merge_duplicate_item(supabase, user_id, keeper, duplicate, preferred_fields=
     updated_fields = item_update_to_view_fields(update_fields)
     updated_fields.update(transferred_fields)
     return {"citation_updates": citation_updates, "updated_fields": updated_fields}
+
+
+def _execute_atomic_duplicate_merge(supabase, function_name, params):
+    response = supabase.rpc(function_name, params).execute()
+    data = getattr(response, "data", None)
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict):
+        raise RuntimeError("統合結果を確認できませんでした。再度実行せず、統合履歴を確認してください。")
+    return data
+
+
+def merge_duplicate_paper(
+    supabase,
+    user_id,
+    keeper,
+    duplicate,
+    merge_group_id=None,
+    preferred_fields=None,
+):
+    merge_group_id = merge_group_id or str(uuid.uuid4())
+    if is_item_backed_paper(keeper) or is_item_backed_paper(duplicate):
+        if not is_item_backed_paper(keeper) or not is_item_backed_paper(duplicate):
+            raise ValueError("items由来とpapers由来の文献は自動統合できません。")
+        return merge_duplicate_item(
+            supabase,
+            user_id,
+            keeper,
+            duplicate,
+            merge_group_id=merge_group_id,
+            preferred_fields=preferred_fields,
+        )
+
+    update_fields, conflicts = build_paper_merge_update(
+        keeper,
+        duplicate,
+        preferred_fields=preferred_fields,
+    )
+    if conflicts:
+        raise ValueError(
+            " / ".join(conflicts)
+            + " が両方の文献にあります。先に残す添付を手動で決めてください。"
+        )
+
+    result = _execute_atomic_duplicate_merge(
+        supabase,
+        "merge_duplicate_papers_atomic",
+        {
+            "p_keeper_paper_id": int(keeper["id"]),
+            "p_duplicate_paper_id": int(duplicate["id"]),
+            "p_merge_group_id": merge_group_id,
+            "p_keeper_snapshot": normalize_snapshot_value(keeper),
+            "p_duplicate_snapshot": normalize_snapshot_value(duplicate),
+            "p_update_fields": normalize_snapshot_value(update_fields),
+        },
+    )
+    return {
+        "citation_updates": int(result.get("citation_updates") or 0),
+        "updated_fields": update_fields,
+        "backup_ids": [result["backup_id"]] if result.get("backup_id") else [],
+        "merge_group_id": result.get("merge_group_id") or merge_group_id,
+    }
+
+
+def merge_duplicate_item(
+    supabase,
+    user_id,
+    keeper,
+    duplicate,
+    merge_group_id=None,
+    preferred_fields=None,
+):
+    update_fields = build_item_merge_update(
+        keeper,
+        duplicate,
+        preferred_fields=preferred_fields,
+    )
+    attachment_conflicts = [
+        label
+        for field, label in (("pdf_path", "PDF"), ("supporting_path", "関連ファイル"))
+        if keeper.get(field)
+        and duplicate.get(field)
+        and keeper.get(field) != duplicate.get(field)
+    ]
+    if attachment_conflicts:
+        raise ValueError(
+            " / ".join(attachment_conflicts)
+            + " が両方の文献にあります。先に残す添付を手動で決めてください。"
+        )
+
+    merge_group_id = merge_group_id or str(uuid.uuid4())
+    result = _execute_atomic_duplicate_merge(
+        supabase,
+        "merge_duplicate_items_atomic",
+        {
+            "p_keeper_item_id": keeper["item_id"],
+            "p_duplicate_item_id": duplicate["item_id"],
+            "p_keeper_paper_id": str(keeper["id"]),
+            "p_duplicate_paper_id": str(duplicate["id"]),
+            "p_merge_group_id": merge_group_id,
+            "p_keeper_snapshot": normalize_snapshot_value(keeper),
+            "p_duplicate_snapshot": normalize_snapshot_value(duplicate),
+            "p_update_fields": normalize_snapshot_value(update_fields),
+        },
+    )
+    updated_fields = item_update_to_view_fields(update_fields)
+    for field in ("pdf_path", "supporting_path"):
+        if not keeper.get(field) and duplicate.get(field):
+            updated_fields[field] = duplicate[field]
+    return {
+        "citation_updates": int(result.get("citation_updates") or 0),
+        "updated_fields": updated_fields,
+        "backup_ids": [result["backup_id"]] if result.get("backup_id") else [],
+        "merge_group_id": result.get("merge_group_id") or merge_group_id,
+    }
 
 
 def sort_papers_dataframe(df, sort_option, added_oldest_first=False):
@@ -2782,11 +2898,17 @@ def make_pdf_archive_filename(paper, index, used_names=None):
     return candidate
 
 
-def build_pdf_download_zip(supabase, papers):
+def build_pdf_download_zip(
+    supabase,
+    papers,
+    max_total_bytes=MAX_PDF_DOWNLOAD_ZIP_BYTES,
+):
     buffer = io.BytesIO()
     downloaded = []
     failed = []
     used_names = set()
+    total_bytes = 0
+    limit_reached = False
 
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for index, paper in enumerate(papers or [], start=1):
@@ -2812,15 +2934,29 @@ def build_pdf_download_zip(supabase, papers):
                 )
                 continue
 
+            if total_bytes + len(pdf_bytes) > max_total_bytes:
+                failed.append(
+                    {
+                        "title": (paper or {}).get("title") or "Untitled",
+                        "error": "archive_size_limit",
+                    }
+                )
+                limit_reached = True
+                continue
+
             filename = make_pdf_archive_filename(paper, index, used_names)
             archive.writestr(filename, pdf_bytes)
             downloaded.append(filename)
+            total_bytes += len(pdf_bytes)
 
     return {
         "bytes": buffer.getvalue(),
         "count": len(downloaded),
         "filenames": downloaded,
         "failed": failed,
+        "total_bytes": total_bytes,
+        "max_total_bytes": max_total_bytes,
+        "limit_reached": limit_reached,
     }
 
 
