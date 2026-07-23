@@ -1822,6 +1822,7 @@ def render_paper_pdf_annotations(
                 continue
             for annotation in visible_annotations:
                 annotation_id = annotation["id"]
+                annotation_key_prefix = f"{key_prefix}_{tab_scope}_{annotation_id}"
                 label = PDF_ANNOTATION_TYPES.get(
                     annotation.get("annotation_type"),
                     annotation.get("annotation_type") or "注釈",
@@ -1839,7 +1840,7 @@ def render_paper_pdf_annotations(
                         with drawing_action_col1:
                             if st.button(
                                 "描画を削除",
-                                key=f"{key_prefix}_drawing_delete_{annotation_id}",
+                                key=f"{annotation_key_prefix}_drawing_delete",
                                 use_container_width=True,
                             ):
                                 try:
@@ -1853,7 +1854,7 @@ def render_paper_pdf_annotations(
                         with drawing_action_col2:
                             if st.button(
                                 "ページへ",
-                                key=f"{key_prefix}_drawing_jump_{annotation_id}",
+                                key=f"{annotation_key_prefix}_drawing_jump",
                                 disabled=not page_state_key,
                                 use_container_width=True,
                             ):
@@ -1870,19 +1871,19 @@ def render_paper_pdf_annotations(
                             if annotation.get("annotation_type") in type_labels.values()
                             else "page_note"
                         ),
-                        key=f"{key_prefix}_annotation_type_{annotation_id}",
+                        key=f"{annotation_key_prefix}_annotation_type",
                     )
                     edit_selected_text = st.text_area(
                         "ハイライトした文・引用したい文",
                         value=annotation.get("selected_text") or "",
                         height=90,
-                        key=f"{key_prefix}_annotation_selected_{annotation_id}",
+                        key=f"{annotation_key_prefix}_annotation_selected",
                     )
                     edit_note = st.text_area(
                         "メモ",
                         value=annotation.get("note") or "",
                         height=100,
-                        key=f"{key_prefix}_annotation_note_{annotation_id}",
+                        key=f"{annotation_key_prefix}_annotation_note",
                     )
                     edit_color = st.selectbox(
                         "色",
@@ -1898,13 +1899,13 @@ def render_paper_pdf_annotations(
                             "#eaf1ff": "青",
                             "#fee7e7": "赤",
                         }.get,
-                        key=f"{key_prefix}_annotation_color_{annotation_id}",
+                        key=f"{annotation_key_prefix}_annotation_color",
                     )
                     action_col1, action_col2, action_col3, action_col4 = st.columns(4)
                     with action_col1:
                         if st.button(
                             "変更を保存",
-                            key=f"{key_prefix}_annotation_save_{annotation_id}",
+                            key=f"{annotation_key_prefix}_annotation_save",
                             use_container_width=True,
                         ):
                             try:
@@ -1925,7 +1926,7 @@ def render_paper_pdf_annotations(
                     with action_col2:
                         if st.button(
                             "削除",
-                            key=f"{key_prefix}_annotation_delete_{annotation_id}",
+                            key=f"{annotation_key_prefix}_annotation_delete",
                             use_container_width=True,
                         ):
                             try:
@@ -1940,12 +1941,12 @@ def render_paper_pdf_annotations(
                             paper,
                             user_id,
                             annotation,
-                            f"{key_prefix}_{annotation_id}",
+                            annotation_key_prefix,
                         )
                     with action_col4:
                         if st.button(
                             "ページへ",
-                            key=f"{key_prefix}_annotation_jump_{annotation_id}",
+                            key=f"{annotation_key_prefix}_annotation_jump",
                             disabled=not page_state_key,
                             use_container_width=True,
                         ):
