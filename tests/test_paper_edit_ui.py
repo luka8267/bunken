@@ -1,7 +1,10 @@
 import ast
+import importlib
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
+import paper_utils
 from streamlit.testing.v1 import AppTest
 
 
@@ -40,6 +43,27 @@ render_paper_edit_form(paper, "u1", key_prefix="test")
 
 
 class PaperEditUITests(unittest.TestCase):
+    def test_startup_refreshes_cached_helper_module_once(self):
+        module = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+        start = next(
+            index for index, node in enumerate(module.body)
+            if isinstance(node, ast.Import)
+            and any(alias.name == "paper_utils" for alias in node.names)
+        )
+        bootstrap = ast.Module(body=module.body[start:start + 2], type_ignores=[])
+        code = compile(bootstrap, str(APP_PATH), "exec")
+        original = paper_utils.normalize_paper_metadata_edit
+        try:
+            del paper_utils.normalize_paper_metadata_edit
+            with patch("importlib.reload", wraps=importlib.reload) as reload_module:
+                namespace = {}
+                exec(code, namespace)
+                self.assertTrue(hasattr(namespace["paper_utils_module"], "normalize_paper_metadata_edit"))
+                exec(code, {})
+                self.assertEqual(reload_module.call_count, 1)
+        finally:
+            paper_utils.normalize_paper_metadata_edit = original
+
     def test_renders_core_fields_and_saves_changed_metadata(self):
         app = make_edit_app()
         self.assertFalse(app.exception)

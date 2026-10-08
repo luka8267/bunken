@@ -51,6 +51,14 @@ from auth_utils import (  # noqa: E402
     update_password,
     verify_password_reset_token,
 )
+import paper_utils as paper_utils_module  # noqa: E402
+
+# Refresh an older cached module when Streamlit hot-reloads this release.
+if not hasattr(paper_utils_module, "normalize_paper_metadata_edit"):
+    import importlib
+
+    importlib.reload(paper_utils_module)
+
 from paper_utils import (  # noqa: E402
     READING_STATUSES,
     SORT_OPTIONS,
@@ -127,7 +135,6 @@ pdf_drawing_canvas = components.declare_component(
     "pdf_drawing_canvas",
     path=PDF_DRAWING_COMPONENT_DIR,
 )
-import paper_utils as paper_utils_module  # noqa: E402
 
 DOI_FORM_FIELDS = (
     "title",
