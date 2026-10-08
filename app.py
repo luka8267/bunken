@@ -98,6 +98,7 @@ from paper_utils import (  # noqa: E402
     merge_duplicate_paper,
     move_paper,
     normalize_doi,
+    normalize_paper_metadata_edit,
     normalize_title_for_match,
     paper_has_document_citation_refs,
     parse_bibtex_entries,
@@ -1336,6 +1337,29 @@ def render_paper_edit_form(
     collection_label_by_id = collection_label_by_id or {}
     collection_id_by_label = collection_id_by_label or {}
 
+    edit_title = st.text_area(
+        "タイトル",
+        value=paper_utils_module.normalize_text_db_value(row_dict.get("title")),
+        height=100,
+        key=f"{key_prefix}_title_{row_dict['id']}",
+    )
+    edit_authors = st.text_area(
+        "著者（カンマ区切り）",
+        value=paper_utils_module.normalize_text_db_value(row_dict.get("authors")),
+        height=80,
+        key=f"{key_prefix}_authors_{row_dict['id']}",
+    )
+    edit_journal = st.text_input(
+        "雑誌名",
+        value=paper_utils_module.normalize_text_db_value(row_dict.get("journal")),
+        key=f"{key_prefix}_journal_{row_dict['id']}",
+    )
+    edit_year = st.text_input(
+        "出版年",
+        value=str(normalize_import_year(row_dict.get("year")) or ""),
+        key=f"{key_prefix}_year_{row_dict['id']}",
+    )
+
     current_status = row_dict.get("status")
     status_index = (
         READING_STATUSES.index(current_status)
@@ -1423,6 +1447,22 @@ def render_paper_edit_form(
 
     if st.button("変更を保存", key=f"{key_prefix}_save_{row_dict['id']}"):
         try:
+            metadata_edits = normalize_paper_metadata_edit(
+                title=edit_title, authors=edit_authors, journal=edit_journal, year=edit_year,
+            )
+        except ValueError as error:
+            st.error(str(error))
+            return
+        metadata_changes = {}
+        for field, value in metadata_edits.items():
+            current = (
+                paper_utils_module.normalize_optional_db_value(row_dict.get(field))
+                if field == "year"
+                else paper_utils_module.normalize_text_db_value(row_dict.get(field)).strip()
+            )
+            if value != current:
+                metadata_changes[field] = "" if field == "year" and value is None else value
+        try:
             new_pdf_path = (
                 upload_pdf_to_storage(supabase, new_pdf_file, user_id)
                 if new_pdf_file
@@ -1442,7 +1482,8 @@ def render_paper_edit_form(
             normalized_edit_doi = normalize_doi(edit_doi)
             current_doi = normalize_doi(row_dict.get("doi"))
             if (
-                edit_status != (row_dict.get("status") or "")
+                metadata_changes
+                or edit_status != (row_dict.get("status") or "")
                 or edit_notes != (row_dict.get("notes") or "")
                 or normalized_edit_url != current_url
                 or normalized_edit_doi != current_doi
@@ -1464,6 +1505,7 @@ def render_paper_edit_form(
                     issue=edit_issue,
                     pages=edit_pages,
                     publisher=edit_publisher,
+                    **metadata_changes,
                 )
             if new_pdf_path or new_supporting_path:
                 update_paper_files(
@@ -1493,7 +1535,7 @@ def render_paper_edit_form(
             ):
                 delete_pdf_from_storage(supabase, supporting_path)
             clear_library_caches()
-            st.success("保存しました。")
+            st.session_state["post_action_success"] = "文献情報を保存しました。"
             st.rerun()
         except Exception:
             logger.exception("Failed to update paper")

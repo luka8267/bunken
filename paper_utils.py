@@ -3197,6 +3197,21 @@ def move_paper(supabase, user_id, paper_id, display_order, direction, item_id=No
     )
 
 
+def normalize_paper_metadata_edit(title=None, authors=None, journal=None, year=None):
+    fields = {}
+    for field, value in (("title", title), ("authors", authors), ("journal", journal)):
+        if value is not None:
+            fields[field] = normalize_text_db_value(value).strip()
+    if "title" in fields and not fields["title"]:
+        raise ValueError("タイトルを入力してください。")
+    if year is not None:
+        text = normalize_text_db_value(year).strip()
+        if text and (not re.fullmatch(r"[0-9]{1,4}", text) or int(text) < 1):
+            raise ValueError("出版年は1〜9999の整数で入力してください。不明な場合は空欄にできます。")
+        fields["year"] = int(text) if text else None
+    return fields
+
+
 def update_paper_details(
     supabase,
     user_id,
@@ -3210,7 +3225,12 @@ def update_paper_details(
     issue=None,
     pages=None,
     publisher=None,
+    title=None,
+    authors=None,
+    journal=None,
+    year=None,
 ):
+    metadata_edits = normalize_paper_metadata_edit(title, authors, journal, year)
     doi_provided = doi is not None
     url_provided = url is not None
     status = normalize_text_db_value(status)
@@ -3227,9 +3247,14 @@ def update_paper_details(
             .limit(1)
             .execute()
         )
+        if metadata_edits and not item_result.data:
+            raise RuntimeError("Item ownership could not be confirmed.")
         extra = (item_result.data or [{}])[0].get("extra") or {}
         extra["legacy_status"] = status
         fields = {"abstract_note": notes, "extra": extra}
+        for field, value in metadata_edits.items():
+            if field != "authors":
+                fields["publication_title" if field == "journal" else field] = value
         if doi_provided:
             fields["doi"] = doi
         if url_provided:
@@ -3263,9 +3288,38 @@ def update_paper_details(
                 .eq("user_id", user_id)
                 .execute()
             )
+        if "authors" in metadata_edits:
+            names = [name.strip() for name in metadata_edits["authors"].split(",") if name.strip()]
+            # Upsert the complete author list before pruning surplus rows; keep editors and other roles.
+            if names:
+                author_rows = [
+                    {
+                        "item_id": item_id,
+                        "creator_type": "author",
+                        "literal_name": name,
+                        "first_name": None,
+                        "last_name": None,
+                        "position": position,
+                    }
+                    for position, name in enumerate(names, start=1)
+                ]
+                (
+                    supabase.table("creators")
+                    .upsert(author_rows, on_conflict="item_id,creator_type,position")
+                    .execute()
+                )
+            (
+                supabase.table("creators")
+                .delete()
+                .eq("item_id", item_id)
+                .eq("creator_type", "author")
+                .gt("position", len(names))
+                .execute()
+            )
         return
 
     fields = {"status": status, "notes": notes}
+    fields.update(metadata_edits)
     if doi_provided:
         fields["doi"] = doi
     if url_provided:

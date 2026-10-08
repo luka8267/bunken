@@ -34,6 +34,7 @@ from paper_utils import (
     normalize_doi,
     normalize_author_list,
     normalize_journal_title,
+    normalize_paper_metadata_edit,
     paper_to_csl_json,
     parse_bibtex_entries,
     parse_ris_entries,
@@ -70,9 +71,12 @@ class Query:
         self.rows.append(dict(values))
         return self
 
-    def upsert(self, values):
-        self.calls.append((self.table_name, "upsert", dict(values)))
-        self.rows.append(dict(values))
+    def upsert(self, values, **kwargs):
+        payload = [dict(row) for row in values] if isinstance(values, list) else dict(values)
+        self.calls.append((self.table_name, "upsert", payload))
+        if kwargs:
+            self.calls.append((self.table_name, "upsert_options", kwargs))
+        self.rows.extend(payload if isinstance(payload, list) else [payload])
         return self
 
     def delete(self):
@@ -88,6 +92,11 @@ class Query:
         values = set(values)
         self.calls.append((self.table_name, "in", column, tuple(sorted(values))))
         self.rows = [row for row in self.rows if row.get(column) in values]
+        return self
+
+    def gt(self, column, value):
+        self.calls.append((self.table_name, "gt", column, value))
+        self.rows = [row for row in self.rows if row.get(column, 0) > value]
         return self
 
     def order(self, *_args, **_kwargs):
@@ -757,6 +766,68 @@ ER  -
             ("item_tags", "upsert", {"item_id": "item-1", "tag_id": "tag-1"}),
             supabase.calls,
         )
+
+    def test_manual_metadata_updates_legacy_paper_with_owner_filter(self):
+        supabase = FakeSupabase({"papers": [{"id": "p1", "user_id": "u1"}]})
+        update_paper_details(
+            supabase, "u1", "p1", "未読", "note",
+            title="Corrected title", authors="Alice, Bob", journal="Journal", year="2026",
+        )
+        fields = next(call[2] for call in supabase.calls if call[:2] == ("papers", "update"))
+        self.assertEqual(fields["title"], "Corrected title")
+        self.assertEqual(fields["authors"], "Alice, Bob")
+        self.assertEqual(fields["journal"], "Journal")
+        self.assertEqual(fields["year"], 2026)
+        self.assertIn(("papers", "eq", "user_id", "u1"), supabase.calls)
+
+    def test_manual_metadata_updates_item_and_author_rows(self):
+        supabase = FakeSupabase({"items": [{"id": "i1", "user_id": "u1", "extra": {"keep": "yes"}}]})
+        update_paper_details(
+            supabase, "u1", "p1", "未読", "note", item_id="i1",
+            title="Corrected title", authors="Alice, Bob", journal="Journal", year="2026",
+        )
+        fields = next(call[2] for call in supabase.calls if call[:2] == ("items", "update"))
+        self.assertEqual(fields["publication_title"], "Journal")
+        self.assertEqual(fields["title"], "Corrected title")
+        self.assertEqual(fields["year"], 2026)
+        self.assertEqual(fields["extra"]["keep"], "yes")
+        authors = next(call[2] for call in supabase.calls if call[:2] == ("creators", "upsert"))
+        self.assertEqual([row["literal_name"] for row in authors], ["Alice", "Bob"])
+        self.assertEqual([row["position"] for row in authors], [1, 2])
+        self.assertIn(("creators", "upsert_options", {"on_conflict": "item_id,creator_type,position"}), supabase.calls)
+        self.assertIn(("creators", "eq", "creator_type", "author"), supabase.calls)
+        self.assertIn(("creators", "gt", "position", 2), supabase.calls)
+        operations = [call[:2] for call in supabase.calls]
+        self.assertLess(operations.index(("creators", "upsert")), operations.index(("creators", "delete")))
+
+    def test_metadata_edit_does_not_touch_authors_when_omitted(self):
+        supabase = FakeSupabase({"items": [{"id": "i1", "user_id": "u1", "extra": {}}]})
+        update_paper_details(supabase, "u1", "p1", "未読", "note", item_id="i1", title="New title")
+        self.assertFalse(any(call[0] == "creators" for call in supabase.calls))
+
+    def test_metadata_edit_can_clear_optional_fields(self):
+        supabase = FakeSupabase({"items": [{"id": "i1", "user_id": "u1", "extra": {}}]})
+        update_paper_details(supabase, "u1", "p1", "未読", "note", item_id="i1", authors="", journal="", year="")
+        fields = next(call[2] for call in supabase.calls if call[:2] == ("items", "update"))
+        self.assertIsNone(fields["year"])
+        self.assertEqual(fields["publication_title"], "")
+        self.assertFalse(any(call[:2] == ("creators", "upsert") for call in supabase.calls))
+        self.assertIn(("creators", "gt", "position", 0), supabase.calls)
+
+    def test_metadata_edit_rejects_invalid_input_before_database_access(self):
+        for fields in ({"title": " "}, {"year": "20xx"}, {"year": "2026.5"}, {"year": "0"}, {"year": "10000"}):
+            with self.subTest(fields=fields):
+                supabase = FakeSupabase({})
+                with self.assertRaises(ValueError):
+                    update_paper_details(supabase, "u1", "p1", "未読", "note", **fields)
+                self.assertEqual(supabase.calls, [])
+        self.assertEqual(normalize_paper_metadata_edit(title=" 日本語 π ", year="2026"), {"title": "日本語 π", "year": 2026})
+
+    def test_metadata_edit_rejects_other_users_item_before_mutation(self):
+        supabase = FakeSupabase({"items": [{"id": "i1", "user_id": "other", "extra": {}}]})
+        with self.assertRaises(RuntimeError):
+            update_paper_details(supabase, "u1", "p1", "未読", "note", item_id="i1", title="New", authors="Alice")
+        self.assertFalse(any(call[1] in {"update", "upsert", "delete"} for call in supabase.calls))
 
     def test_tag_api_error_keeps_list_rendering(self):
         supabase = FakeSupabase(
