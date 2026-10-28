@@ -54,7 +54,9 @@ from auth_utils import (  # noqa: E402
 import paper_utils as paper_utils_module  # noqa: E402
 
 # Refresh an older cached module when Streamlit hot-reloads this release.
-if not hasattr(paper_utils_module, "normalize_paper_metadata_edit"):
+if any(not hasattr(paper_utils_module, name) for name in (
+    "normalize_paper_metadata_edit", "normalize_publication_pages",
+)):
     import importlib
 
     importlib.reload(paper_utils_module)
@@ -1230,7 +1232,7 @@ def render_paper_summary(paper, tag_map=None, show_id=False, citation_usage_map=
     year = clean_display_text(paper.get("year"))
     volume = clean_display_text(paper.get("volume"))
     issue_value = clean_display_text(paper.get("issue"))
-    pages = clean_display_text(paper.get("pages"))
+    pages = paper_utils_module.normalize_publication_pages(paper.get("pages"))
     publisher = clean_display_text(paper.get("publisher"))
 
     st.markdown(f"### {heading_prefix}{title}")
@@ -1403,8 +1405,8 @@ def render_paper_edit_form(
             key=f"{key_prefix}_volume_{row_dict['id']}",
         )
         edit_pages = st.text_input(
-            "ページ",
-            value=row_dict.get("pages") or "",
+            "ページ / 論文番号",
+            value=paper_utils_module.normalize_publication_pages(row_dict.get("pages")),
             key=f"{key_prefix}_pages_{row_dict['id']}",
         )
     with edit_meta_col2:
@@ -1496,7 +1498,7 @@ def render_paper_edit_form(
                 or normalized_edit_doi != current_doi
                 or edit_volume != (row_dict.get("volume") or "")
                 or edit_issue != (row_dict.get("issue") or "")
-                or edit_pages != (row_dict.get("pages") or "")
+                or edit_pages != paper_utils_module.normalize_publication_pages(row_dict.get("pages"))
                 or edit_publisher != (row_dict.get("publisher") or "")
             ):
                 update_paper_details(
@@ -2440,7 +2442,7 @@ def crossref_message_to_metadata(data):
     journal = data["container-title"][0] if data.get("container-title") else ""
     volume = str(data.get("volume") or "")
     issue = str(data.get("issue") or "")
-    pages = str(data.get("page") or "")
+    pages = paper_utils_module.normalize_publication_pages(data.get("page"), data.get("article-number"))
     publisher = str(data.get("publisher") or "")
 
     issued = data.get("issued", {}).get("date-parts", [])
@@ -2543,7 +2545,7 @@ def build_missing_doi_candidates(papers):
 PUBLICATION_METADATA_FIELDS = (
     ("volume", "巻"),
     ("issue", "号"),
-    ("pages", "ページ"),
+    ("pages", "ページ / 論文番号"),
     ("publisher", "出版社"),
 )
 
@@ -2552,7 +2554,7 @@ def get_missing_publication_metadata_fields(paper):
     return [
         (field, label)
         for field, label in PUBLICATION_METADATA_FIELDS
-        if not paper.get(field)
+        if not clean_display_text(paper.get(field))
     ]
 
 
@@ -2598,7 +2600,7 @@ def build_existing_doi_metadata_candidates(papers):
             "pages": metadata[6],
             "publisher": metadata[7],
         }
-        if any(candidate.get(field) and not paper.get(field) for field in ("volume", "issue", "pages", "publisher")):
+        if any(clean_display_text(candidate.get(field)) and not clean_display_text(paper.get(field)) for field in ("volume", "issue", "pages", "publisher")):
             candidates.append({"paper": paper, "candidate": candidate})
     return candidates
 
@@ -2619,7 +2621,7 @@ def normalize_import_candidate(candidate):
         "url": normalize_url(candidate.get("url")) or "",
         "volume": candidate.get("volume") or "",
         "issue": candidate.get("issue") or "",
-        "pages": candidate.get("pages") or "",
+        "pages": paper_utils_module.normalize_publication_pages(candidate.get("pages"), candidate.get("article-number"), candidate.get("eid")),
         "publisher": candidate.get("publisher") or "",
         "import_error": candidate.get("import_error") or "",
     }
@@ -2984,10 +2986,14 @@ def fetch_url_metadata(url):
     doi = extract_doi(doi) or doi
     volume = first("citation_volume")
     issue = first("citation_issue")
-    pages = first("citation_firstpage")
-    last_page = first("citation_lastpage")
-    if pages and last_page:
+    pages = paper_utils_module.normalize_publication_pages(first("citation_firstpage"))
+    last_page = paper_utils_module.normalize_publication_pages(first("citation_lastpage"))
+    if pages and last_page and pages != last_page:
         pages = f"{pages}-{last_page}"
+    if not pages:
+        pages = paper_utils_module.normalize_publication_pages(
+            first("citation_article_number"), first("citation_elocation_id"),
+        )
     publisher = first("citation_publisher", "dc.publisher")
 
     if not any([title, authors, journal, year, doi, volume, issue, pages, publisher]):
@@ -3124,7 +3130,7 @@ if menu == "追加":
     meta_col1, meta_col2 = st.columns(2)
     with meta_col1:
         volume = st.text_input("巻", value=st.session_state.get("volume", ""))
-        pages = st.text_input("ページ", value=st.session_state.get("pages", ""))
+        pages = st.text_input("ページ / 論文番号", value=st.session_state.get("pages", ""))
     with meta_col2:
         issue = st.text_input("号", value=st.session_state.get("issue", ""))
         publisher = st.text_input("出版社", value=st.session_state.get("publisher", ""))
@@ -3765,7 +3771,7 @@ elif menu == "一覧":
                                 doi=candidate["doi"],
                                 volume=paper.get("volume") or candidate.get("volume") or "",
                                 issue=paper.get("issue") or candidate.get("issue") or "",
-                                pages=paper.get("pages") or candidate.get("pages") or "",
+                                pages=paper_utils_module.normalize_publication_pages(paper.get("pages"), candidate.get("pages")),
                                 publisher=paper.get("publisher")
                                 or candidate.get("publisher")
                                 or "",
@@ -3825,10 +3831,10 @@ elif menu == "一覧":
                         for label, field in (
                             ("巻", "volume"),
                             ("号", "issue"),
-                            ("ページ", "pages"),
+                            ("ページ / 論文番号", "pages"),
                             ("出版社", "publisher"),
                         )
-                        if candidate.get(field) and not paper.get(field)
+                        if clean_display_text(candidate.get(field)) and not clean_display_text(paper.get(field))
                     ]
                     st.write(f"- {paper.get('title') or '無題'} → " + " / ".join(values))
 
@@ -3855,7 +3861,7 @@ elif menu == "一覧":
                                 doi=normalize_doi(paper.get("doi")),
                                 volume=paper.get("volume") or candidate.get("volume") or "",
                                 issue=paper.get("issue") or candidate.get("issue") or "",
-                                pages=paper.get("pages") or candidate.get("pages") or "",
+                                pages=paper_utils_module.normalize_publication_pages(paper.get("pages"), candidate.get("pages")),
                                 publisher=paper.get("publisher")
                                 or candidate.get("publisher")
                                 or "",

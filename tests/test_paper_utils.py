@@ -672,6 +672,14 @@ ER  -
         self.assertIsNone(fields["volume"])
         self.assertEqual(fields["issue"], "2")
 
+    def test_update_item_pages_keeps_article_numbers_and_rejects_nan_placeholders(self):
+        for pages, expected in (("nan", None), (float("nan"), None), ("e25338", "e25338"), (125108.0, "125108")):
+            with self.subTest(pages=pages):
+                supabase = FakeSupabase({"items": [{"id": "item-1", "user_id": "u1", "extra": {}}]})
+                update_paper_details(supabase, "u1", "p1", "未読", "note", item_id="item-1", pages=pages)
+                fields = next(call[2] for call in supabase.calls if call[:2] == ("items", "update"))
+                self.assertEqual(fields["pages"], expected)
+
     def test_uuid_paper_id_uses_collection_items_only(self):
         supabase = FakeSupabase(
             {

@@ -174,6 +174,17 @@ def normalize_text_db_value(value):
     return str(value)
 
 
+def normalize_publication_pages(*values):
+    for value in values:
+        value = normalize_json_value(value)
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        text = normalize_text_db_value(value).strip()
+        if text and text.casefold() not in {"nan", "none", "null", "<na>", "nat", "n/a"}:
+            return text
+    return ""
+
+
 def normalize_doi(doi):
     doi = normalize_json_value(doi)
     if doi is None:
@@ -715,6 +726,8 @@ def create_item_backed_paper(
         ("pages", pages),
         ("publisher", publisher),
     ):
+        if field == "pages":
+            value = normalize_publication_pages(value)
         if value:
             item_payload[field] = value
 
@@ -2344,7 +2357,7 @@ def paper_to_csl_json(row):
         "container-title": normalize_text_db_value(row.get("journal")),
         "volume": normalize_text_db_value(row.get("volume")),
         "issue": normalize_text_db_value(row.get("issue")),
-        "page": normalize_text_db_value(row.get("pages")),
+        "page": normalize_publication_pages(row.get("pages")),
         "publisher": normalize_text_db_value(row.get("publisher")),
         "DOI": normalize_doi(row.get("doi")) or "",
         "URL": normalize_text_db_value(row.get("url")),
@@ -2393,7 +2406,7 @@ def make_word_citation_fallback(row, style="APA"):
     doi = normalize_doi(row.get("doi", ""))
     volume = normalize_text_db_value(row.get("volume"))
     issue = normalize_text_db_value(row.get("issue"))
-    pages = normalize_text_db_value(row.get("pages"))
+    pages = normalize_publication_pages(row.get("pages"))
     publication = journal
     if volume:
         publication += f", {volume}"
@@ -2480,7 +2493,7 @@ def make_bibtex_entry(row):
         ("year", normalize_text_db_value(row.get("year"))),
         ("volume", normalize_text_db_value(row.get("volume"))),
         ("number", normalize_text_db_value(row.get("issue"))),
-        ("pages", normalize_text_db_value(row.get("pages"))),
+        ("pages", normalize_publication_pages(row.get("pages"))),
         ("publisher", normalize_text_db_value(row.get("publisher"))),
         ("doi", normalize_bibtex_doi(row.get("doi"))),
         ("url", normalize_text_db_value(row.get("url"))),
@@ -2506,7 +2519,7 @@ def make_ris_entry(row):
         ("PY", normalize_text_db_value(row.get("year"))),
         ("VL", normalize_text_db_value(row.get("volume"))),
         ("IS", normalize_text_db_value(row.get("issue"))),
-        ("SP", normalize_text_db_value(row.get("pages"))),
+        ("SP", normalize_publication_pages(row.get("pages"))),
         ("PB", normalize_text_db_value(row.get("publisher"))),
         ("DO", normalize_bibtex_doi(row.get("doi"))),
         ("UR", normalize_text_db_value(row.get("url"))),
@@ -2550,7 +2563,7 @@ def parse_bibtex_entries(text):
                     "url": fields.get("url", ""),
                     "volume": fields.get("volume", ""),
                     "issue": fields.get("number", ""),
-                    "pages": fields.get("pages", ""),
+                    "pages": normalize_publication_pages(fields.get("pages"), fields.get("eid")),
                     "publisher": fields.get("publisher", ""),
                 }
             )
@@ -3267,6 +3280,8 @@ def update_paper_details(
         }
         for field, value in metadata_fields.items():
             if value is not None:
+                if field == "pages":
+                    value = normalize_publication_pages(value)
                 fields[field] = normalize_optional_db_value(value)
         try:
             (

@@ -11,13 +11,14 @@ from streamlit.testing.v1 import AppTest
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 
 
-def make_edit_app():
+def make_edit_app(pages=None):
     module = ast.parse(APP_PATH.read_text(encoding="utf-8"))
     functions = [
         node for node in module.body
         if isinstance(node, ast.FunctionDef)
         and node.name in {"render_paper_edit_form", "normalize_import_year"}
     ]
+    pages_expression = "float('nan')" if isinstance(pages, float) and pages != pages else repr(pages)
     script = '''
 import re
 import streamlit as st
@@ -37,12 +38,24 @@ paper = {
     "id": "p1", "item_id": "i1", "title": "Old title", "authors": "Alice, Bob",
     "journal": "Old journal", "year": 2025, "status": "未読", "notes": "note",
 }
+''' + f'paper["pages"] = {pages_expression}\n' + '''
 render_paper_edit_form(paper, "u1", key_prefix="test")
 '''
     return AppTest.from_string(script).run()
 
 
 class PaperEditUITests(unittest.TestCase):
+    def test_pages_field_accepts_article_number_and_hides_nan(self):
+        for pages in ("nan", float("nan")):
+            with self.subTest(pages=pages):
+                app = make_edit_app(pages=pages)
+                self.assertFalse(app.exception)
+                self.assertEqual(app.text_input(key="test_pages_p1").value, "")
+                app.text_input(key="test_pages_p1").set_value("e25338")
+                app.button(key="test_save_p1").click().run()
+                self.assertFalse(app.exception)
+                self.assertEqual(app.session_state["test_updates"][0]["pages"], "e25338")
+
     def test_startup_refreshes_cached_helper_module_once(self):
         module = ast.parse(APP_PATH.read_text(encoding="utf-8"))
         start = next(
@@ -52,17 +65,19 @@ class PaperEditUITests(unittest.TestCase):
         )
         bootstrap = ast.Module(body=module.body[start:start + 2], type_ignores=[])
         code = compile(bootstrap, str(APP_PATH), "exec")
-        original = paper_utils.normalize_paper_metadata_edit
-        try:
-            del paper_utils.normalize_paper_metadata_edit
-            with patch("importlib.reload", wraps=importlib.reload) as reload_module:
-                namespace = {}
-                exec(code, namespace)
-                self.assertTrue(hasattr(namespace["paper_utils_module"], "normalize_paper_metadata_edit"))
-                exec(code, {})
-                self.assertEqual(reload_module.call_count, 1)
-        finally:
-            paper_utils.normalize_paper_metadata_edit = original
+        for name in ("normalize_paper_metadata_edit", "normalize_publication_pages"):
+            with self.subTest(missing=name):
+                original = getattr(paper_utils, name)
+                try:
+                    delattr(paper_utils, name)
+                    with patch("importlib.reload", wraps=importlib.reload) as reload_module:
+                        namespace = {}
+                        exec(code, namespace)
+                        self.assertTrue(hasattr(namespace["paper_utils_module"], name))
+                        exec(code, {})
+                        self.assertEqual(reload_module.call_count, 1)
+                finally:
+                    setattr(paper_utils, name, original)
 
     def test_renders_core_fields_and_saves_changed_metadata(self):
         app = make_edit_app()
