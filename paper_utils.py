@@ -6,6 +6,7 @@ import re
 import unicodedata
 import uuid
 import zipfile
+from urllib.parse import unquote
 
 from docx import Document
 
@@ -189,14 +190,14 @@ def normalize_doi(doi):
     doi = normalize_json_value(doi)
     if doi is None:
         return ""
-    text = str(doi).strip()
+    text = unquote(str(doi).strip())
     if not isinstance(doi, str):
         match = DOI_RE.search(text)
         return match.group(0).rstrip(").,;]") if match else ""
     if not text:
         return ""
     text = re.sub(r"^doi:\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(?:https?://)?(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE)
     if text.lower().startswith(("http://", "https://")):
         match = DOI_RE.search(text)
         if match:
@@ -432,15 +433,37 @@ def make_safe_storage_filename(filename, default_ext=".pdf"):
     return f"{uuid.uuid4().hex}_{safe_name}{ext}"
 
 
+def attach_author_lists(supabase, result):
+    rows = result.data or []
+    item_ids = [row["item_id"] for row in rows if row.get("item_id") and "authors" in row]
+    if not item_ids:
+        return result
+    authors = supabase.table("creators").select("item_id,first_name,last_name,literal_name,position").in_("item_id", item_ids).eq("creator_type", "author").order("position").execute().data or []
+    grouped = {}
+    for author in authors:
+        if author.get("last_name"):
+            value = {"family": author["last_name"], "given": author.get("first_name") or ""}
+        elif author.get("literal_name"):
+            value = {"literal": author["literal_name"]}
+        else:
+            continue
+        grouped.setdefault(author["item_id"], []).append(value)
+    for row in rows:
+        if row.get("item_id") in grouped:
+            row["author_list"] = grouped[row["item_id"]]
+    return result
+
+
 def fetch_user_papers(supabase, user_id, columns="*"):
     try:
-        return (
+        result = (
             supabase.table(PAPER_ITEMS_VIEW)
             .select(columns)
             .eq("user_id", user_id)
             .order("display_order")
             .execute()
         )
+        return attach_author_lists(supabase, result)
     except APIError as error:
         if is_missing_metadata_column_error(error):
             fallback_columns = strip_metadata_columns(columns)
@@ -2316,6 +2339,8 @@ def list_available_csl_styles(query="", limit=80):
 
 
 def parse_csl_authors(authors):
+    if isinstance(authors, list) and all(isinstance(author, dict) for author in authors):
+        return [{key: normalize_text_db_value(author[key]) for key in ("family", "given", "literal") if author.get(key)} for author in authors]
     csl_authors = []
     for name in normalize_bibtex_authors(authors):
         text = re.sub(r"\s+", " ", name or "").strip()
@@ -2361,7 +2386,7 @@ def paper_to_csl_json(row):
         "publisher": normalize_text_db_value(row.get("publisher")),
         "DOI": normalize_doi(row.get("doi")) or "",
         "URL": normalize_text_db_value(row.get("url")),
-        "author": parse_csl_authors(row.get("authors")),
+        "author": parse_csl_authors(row.get("author_list") if isinstance(row.get("author_list"), list) and row["author_list"] else row.get("authors")),
     }
     if year:
         data["issued"] = {"date-parts": [[year]]}
@@ -2454,8 +2479,12 @@ def normalize_bibtex_authors(authors):
     if isinstance(authors, (list, tuple, set)):
         return [
             name
-            for name in (normalize_author_name(author) for author in authors)
-            if name
+            for name in (
+                normalize_text_db_value(author.get("literal")) if isinstance(author, dict) and author.get("literal")
+                else normalize_author_name(author)
+                for author in authors
+            )
+            if name and name.casefold() not in {"nan", "none", "null", "<na>"}
         ]
     names = [
         name.strip()
@@ -2468,7 +2497,7 @@ def normalize_bibtex_authors(authors):
             for name in normalize_text_db_value(authors).split(",")
             if name.strip()
         ]
-    return names
+    return [name for name in names if name.casefold() not in {"nan", "none", "null", "<na>"}]
 
 
 def normalize_author_text(authors):
@@ -2488,13 +2517,13 @@ def make_bibtex_entry(row):
     entry_type = "article" if row.get("journal") else "misc"
     fields = [
         ("title", normalize_text_db_value(row.get("title"))),
-        ("author", " and ".join(normalize_bibtex_authors(row.get("authors")))),
+        ("author", " and ".join(normalize_bibtex_authors(row.get("author_list") if isinstance(row.get("author_list"), list) and row["author_list"] else row.get("authors")))),
         ("journal", normalize_text_db_value(row.get("journal"))),
         ("year", normalize_text_db_value(row.get("year"))),
-        ("volume", normalize_text_db_value(row.get("volume"))),
-        ("number", normalize_text_db_value(row.get("issue"))),
+        ("volume", normalize_publication_pages(row.get("volume"))),
+        ("number", normalize_publication_pages(row.get("issue"))),
         ("pages", normalize_publication_pages(row.get("pages"))),
-        ("publisher", normalize_text_db_value(row.get("publisher"))),
+        ("publisher", normalize_publication_pages(row.get("publisher"))),
         ("doi", normalize_bibtex_doi(row.get("doi"))),
         ("url", normalize_text_db_value(row.get("url"))),
     ]
@@ -2511,16 +2540,16 @@ def make_bibtex_entry(row):
 def make_ris_entry(row):
     ris_type = "JOUR" if row.get("journal") else "GEN"
     lines = [f"TY  - {ris_type}"]
-    for author in normalize_bibtex_authors(row.get("authors")):
+    for author in normalize_bibtex_authors(row.get("author_list") if isinstance(row.get("author_list"), list) and row["author_list"] else row.get("authors")):
         lines.append(f"AU  - {author}")
     field_map = [
         ("TI", normalize_text_db_value(row.get("title"))),
         ("T2", normalize_text_db_value(row.get("journal"))),
         ("PY", normalize_text_db_value(row.get("year"))),
-        ("VL", normalize_text_db_value(row.get("volume"))),
-        ("IS", normalize_text_db_value(row.get("issue"))),
+        ("VL", normalize_publication_pages(row.get("volume"))),
+        ("IS", normalize_publication_pages(row.get("issue"))),
         ("SP", normalize_publication_pages(row.get("pages"))),
-        ("PB", normalize_text_db_value(row.get("publisher"))),
+        ("PB", normalize_publication_pages(row.get("publisher"))),
         ("DO", normalize_bibtex_doi(row.get("doi"))),
         ("UR", normalize_text_db_value(row.get("url"))),
     ]

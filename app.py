@@ -55,11 +55,13 @@ import paper_utils as paper_utils_module  # noqa: E402
 
 # Refresh an older cached module when Streamlit hot-reloads this release.
 if any(not hasattr(paper_utils_module, name) for name in (
-    "normalize_paper_metadata_edit", "normalize_publication_pages",
+    "normalize_paper_metadata_edit", "normalize_publication_pages", "attach_author_lists",
 )):
     import importlib
 
     importlib.reload(paper_utils_module)
+
+from bibliography_ui import render_bibliography_review  # noqa: E402
 
 from paper_utils import (  # noqa: E402
     READING_STATUSES,
@@ -2438,7 +2440,11 @@ def extract_doi(text):
 
 def crossref_message_to_metadata(data):
     title = data["title"][0] if data.get("title") else ""
-    authors = ", ".join(author.get("family", "") for author in data.get("author", []))
+    authors = ", ".join(
+        " ".join(part for part in (author.get("given"), author.get("family")) if part)
+        or author.get("name", "")
+        for author in data.get("author", [])
+    )
     journal = data["container-title"][0] if data.get("container-title") else ""
     volume = str(data.get("volume") or "")
     issue = str(data.get("issue") or "")
@@ -3798,6 +3804,9 @@ elif menu == "一覧":
                 use_container_width=True,
             )
         with metadata_popover:
+            if st.button("DOIから書誌情報を更新", key="review_full_bibliography", use_container_width=True):
+                render_bibliography_review(supabase, user_id, all_records, clear_library_caches)
+            st.divider()
             st.caption(
                 "既にDOIがある文献について、Crossrefから巻・号・ページ・出版社を取得します。"
                 "既に入力済みの値は上書きしません。"
