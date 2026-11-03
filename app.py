@@ -181,6 +181,7 @@ CHROME_EXTENSION_FILES = (
     "manifest.json",
     "popup.html",
     "popup.css",
+    "extractor.js",
     "popup.js",
     "README.md",
 )
