@@ -864,12 +864,12 @@ def clear_library_caches():
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def build_chrome_extension_zip():
+def build_chrome_extension_zip(package_version="0.2.16"):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file_name in CHROME_EXTENSION_FILES:
             response = requests.get(
-                f"{CHROME_EXTENSION_RAW_BASE}/{file_name}?v={uuid.uuid4().hex}",
+                f"{CHROME_EXTENSION_RAW_BASE}/{file_name}?v={package_version}-{uuid.uuid4().hex}",
                 timeout=15,
             )
             response.raise_for_status()
